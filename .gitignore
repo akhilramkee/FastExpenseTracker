@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Python / server
+server/venv/
+server/__pycache__/
+server/*.db
+server/.pytest_cache/
+
+# Flutter / client (see client/.gitignore for full list)
+client/build/
+client/.dart_tool/
