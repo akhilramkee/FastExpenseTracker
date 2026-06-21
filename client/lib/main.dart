@@ -517,8 +517,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
                           border: InputBorder.none,
                           prefixIcon: IconButton(
-                            tooltip: 'Import from file',
-                            onPressed: _serverOnline && !_isImporting ? _importFromFile : null,
+                            tooltip: _serverOnline
+                                ? 'Import from file'
+                                : 'Import from file (requires server connection)',
+                            onPressed: _isImporting ? null : _importFromFile,
                             icon: _isImporting
                                 ? const SizedBox(
                                     width: 20,
