@@ -22,8 +22,9 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -43,6 +44,21 @@ class DatabaseHelper {
         updated_at TEXT NOT NULL
       )
     ''');
+    await db.execute('''
+      CREATE TABLE pending_deletes (
+        id TEXT PRIMARY KEY
+      )
+    ''');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS pending_deletes (
+          id TEXT PRIMARY KEY
+        )
+      ''');
+    }
   }
 
   Future<int> insertTransaction(TransactionModel transaction) async {
@@ -109,5 +125,25 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  Future<void> queueDelete(String id) async {
+    final db = await database;
+    await db.insert(
+      'pending_deletes',
+      {'id': id},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<String>> getPendingDeletes() async {
+    final db = await database;
+    final rows = await db.query('pending_deletes');
+    return rows.map((row) => row['id'] as String).toList();
+  }
+
+  Future<void> clearPendingDelete(String id) async {
+    final db = await database;
+    await db.delete('pending_deletes', where: 'id = ?', whereArgs: [id]);
   }
 }

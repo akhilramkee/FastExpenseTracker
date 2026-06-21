@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../db/database_helper.dart';
 import '../models/transaction_model.dart';
@@ -10,33 +9,60 @@ class SyncWorker {
     defaultValue: '100.118.49.74',
   );
   static const String baseUrl = 'http://$serverHost:8080';
+  static const String healthUrl = '$baseUrl/health';
   static const String syncUrl = '$baseUrl/api/v1/sync';
+  static const String deletesUrl = '$baseUrl/api/v1/sync/deletes';
   static const String statusUrl = '$baseUrl/api/v1/sync/status';
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
-  // Network Handshake Verification (Fail-fast if target node is unreachable)
   Future<bool> isServerReachable() async {
     try {
-      final result = await InternetAddress.lookup(serverHost)
+      final response = await http
+          .get(Uri.parse(healthUrl))
           .timeout(const Duration(seconds: 3));
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      return response.statusCode == 200;
     } catch (_) {
       return false;
     }
   }
 
-  // Pushes pending transactions to the server
+  Future<bool> syncPendingDeletes() async {
+    final pendingDeletes = await _dbHelper.getPendingDeletes();
+    if (pendingDeletes.isEmpty) return true;
+
+    if (!await isServerReachable()) return false;
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse(deletesUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'ids': pendingDeletes}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        for (final id in pendingDeletes) {
+          await _dbHelper.clearPendingDelete(id);
+        }
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> performBackgroundSync() async {
+    if (!await isServerReachable()) return false;
+
+    await syncPendingDeletes();
+
     final pending = await _dbHelper.getPendingTransactions();
     if (pending.isEmpty) return true;
 
-    if (!await isServerReachable()) {
-      return false;
-    }
-
     try {
-      // Set status to processing locally to avoid duplicate syncs
       for (var tx in pending) {
         await _dbHelper.updateSyncStatus(tx.id, SyncStatus.processing);
       }
@@ -54,14 +80,12 @@ class SyncWorker {
       if (response.statusCode == 202) {
         return true;
       } else {
-        // Rollback to pending/failed if server rejected it
         for (var tx in pending) {
           await _dbHelper.updateSyncStatus(tx.id, SyncStatus.failed);
         }
         return false;
       }
     } catch (_) {
-      // Rollback to failed on error
       for (var tx in pending) {
         await _dbHelper.updateSyncStatus(tx.id, SyncStatus.failed);
       }
@@ -69,14 +93,15 @@ class SyncWorker {
     }
   }
 
-  // Pulls enriched states from the server and updates local DB
   Future<void> pullSyncUpdates() async {
     if (!await isServerReachable()) return;
 
     try {
       final transactions = await _dbHelper.getTransactions();
       final unfinished = transactions
-          .where((tx) => tx.syncStatus == SyncStatus.processing || tx.syncStatus == SyncStatus.failed)
+          .where((tx) =>
+              tx.syncStatus == SyncStatus.processing ||
+              tx.syncStatus == SyncStatus.failed)
           .toList();
 
       if (unfinished.isEmpty) return;
@@ -90,12 +115,18 @@ class SyncWorker {
         final List<dynamic> data = jsonDecode(response.body);
         for (var item in data) {
           final serverTx = TransactionModel.fromMap(item);
-          // Update local record if the status changed from processing
           await _dbHelper.updateTransaction(serverTx);
         }
       }
-    } catch (e) {
+    } catch (_) {
       // Fail silently to prevent user disruption
     }
+  }
+
+  Future<bool> syncAll() async {
+    await syncPendingDeletes();
+    final pushed = await performBackgroundSync();
+    await pullSyncUpdates();
+    return pushed;
   }
 }

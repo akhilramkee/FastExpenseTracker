@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'core/db/database_helper.dart';
 import 'core/models/transaction_model.dart';
 import 'core/network/sync_worker.dart';
+import 'core/utils/category_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -68,6 +69,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Live preview parser state
   double _parsedAmount = 0.0;
+  String? _selectedCategoryFilter;
+
+  List<TransactionModel> get _filteredTransactions {
+    if (_selectedCategoryFilter == null) return _transactions;
+    return _transactions
+        .where((tx) => tx.tag.toLowerCase() == _selectedCategoryFilter)
+        .toList();
+  }
+
+  List<String> get _availableCategories {
+    final tags = _transactions.map((tx) => tx.tag.toLowerCase()).toSet().toList();
+    tags.sort();
+    return tags;
+  }
 
   @override
   void initState() {
@@ -124,16 +139,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final text = _entryController.text.trim();
     if (text.isEmpty) {
       setState(() {
-        _livePreviewText = "Type something like: 1450 zoom subscription renewal @work";
+        _livePreviewText = "Type something like: 06/20 45.90 dinner @night #food (date optional, defaults to today)";
         _parsedAmount = 0.0;
       });
       return;
     }
 
     final parsed = TransactionModel.parse(text);
+    final dateLabel = DateFormat('MMM d, yyyy').format(parsed.createdAt);
     setState(() {
       _parsedAmount = parsed.amount;
-      _livePreviewText = "Preview — Amount: \$${parsed.amount.toStringAsFixed(2)}  •  Tag: #${parsed.tag}";
+      _livePreviewText =
+          "Preview — $dateLabel • Amount: \$${parsed.amount.toStringAsFixed(2)}  •  Tag: #${parsed.tag}";
     });
   }
 
@@ -158,13 +175,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     try {
-      // 1. Push pending
-      await _syncWorker.performBackgroundSync();
-      // 2. Reload local list
-      await _loadTransactions();
-      // 3. Pull latest enriched changes
-      await _syncWorker.pullSyncUpdates();
-      // 4. Reload final
+      await _syncWorker.syncAll();
       await _loadTransactions();
     } finally {
       if (mounted) {
@@ -175,14 +186,89 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  double _calculateTotalExpenses() {
-    return _transactions.fold(0.0, (sum, item) => sum + item.amount);
+  Future<void> _editTransaction(TransactionModel tx) async {
+    final controller = TextEditingController(text: tx.rawInput);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1F30),
+        title: const Text('Edit expense'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'e.g. 06/20 45.90 dinner @night #food',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (result == null || result.trim().isEmpty) return;
+
+    final updated = tx.reparse(result.trim());
+    await _dbHelper.updateTransaction(updated);
+    await _loadTransactions();
+    _triggerSync();
+  }
+
+  Future<void> _deleteTransaction(TransactionModel tx) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1F30),
+        title: const Text('Delete expense?'),
+        content: Text(
+          'Remove "${tx.description}" (\$${tx.amount.toStringAsFixed(2)})? This will sync the deletion to the server.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    await _dbHelper.queueDelete(tx.id);
+    await _dbHelper.deleteTransaction(tx.id);
+    if (_selectedCategoryFilter != null &&
+        !_transactions.any((t) => t.id != tx.id && t.tag.toLowerCase() == _selectedCategoryFilter)) {
+      _selectedCategoryFilter = null;
+    }
+    await _loadTransactions();
+    _triggerSync();
+  }
+
+  double _calculateTotalExpenses(List<TransactionModel> transactions) {
+    return transactions.fold(0.0, (sum, item) => sum + item.amount);
   }
 
   @override
   Widget build(BuildContext context) {
-    final totalExpense = _calculateTotalExpenses();
+    final visibleTransactions = _filteredTransactions;
+    final totalExpense = _calculateTotalExpenses(visibleTransactions);
     final formatter = NumberFormat.currency(symbol: '\$');
+    final isFiltered = _selectedCategoryFilter != null;
 
     return Scaffold(
       body: SafeArea(
@@ -293,7 +379,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      '${_transactions.length} Transactions Logged',
+                      isFiltered
+                          ? '${visibleTransactions.length} of ${_transactions.length} shown'
+                          : '${_transactions.length} Transactions Logged',
                       style: TextStyle(
                         fontSize: 14,
                         color: Colors.white.withValues(alpha: 0.9),
@@ -318,7 +406,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     TextField(
                       controller: _entryController,
                       decoration: InputDecoration(
-                        hintText: 'Add expense (e.g. 45.90 dinner @night #food)',
+                        hintText: 'Add expense (e.g. 06/20 45.90 dinner @night #food)',
                         hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
                         border: InputBorder.none,
                         suffixIcon: IconButton(
@@ -366,9 +454,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SizedBox(height: 12),
 
+              const SizedBox(height: 16),
+
+              if (_availableCategories.isNotEmpty) ...[
+                SizedBox(
+                  height: 36,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _buildFilterChip(label: 'All', value: null),
+                      ..._availableCategories.map(
+                        (category) => _buildFilterChip(label: category, value: category),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
               // Transaction List
               Expanded(
-                child: _transactions.isEmpty
+                child: visibleTransactions.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -376,23 +482,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             Icon(Icons.receipt_long_rounded, size: 64, color: Colors.grey[700]),
                             const SizedBox(height: 16),
                             Text(
-                              'No transactions yet.',
+                              isFiltered ? 'No transactions in this category.' : 'No transactions yet.',
                               style: TextStyle(color: Colors.grey[500], fontSize: 16),
                             ),
                           ],
                         ),
                       )
                     : ListView.builder(
-                        itemCount: _transactions.length,
+                        itemCount: visibleTransactions.length,
                         physics: const BouncingScrollPhysics(),
                         itemBuilder: (context, index) {
-                          final tx = _transactions[index];
+                          final tx = visibleTransactions[index];
                           return _buildTransactionCard(tx);
                         },
                       ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({required String label, required String? value}) {
+    final selected = _selectedCategoryFilter == value;
+    final style = value != null
+        ? resolveCategoryStyle(tag: value)
+        : const CategoryStyle(icon: Icons.grid_view_rounded, color: Color(0xFF8B5CF6));
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        label: Text(label),
+        avatar: Icon(style.icon, size: 16, color: selected ? Colors.white : style.color),
+        selected: selected,
+        onSelected: (_) {
+          setState(() {
+            _selectedCategoryFilter = value;
+          });
+        },
+        selectedColor: style.color.withValues(alpha: 0.35),
+        checkmarkColor: Colors.white,
+        backgroundColor: const Color(0xFF1E1F30),
+        labelStyle: TextStyle(
+          color: selected ? Colors.white : Colors.grey[300],
+          fontSize: 12,
+        ),
+        side: BorderSide(
+          color: selected ? style.color : Colors.white.withValues(alpha: 0.08),
         ),
       ),
     );
@@ -423,8 +560,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         break;
     }
 
-    final displayTag = tx.merchant ?? tx.tag;
-    final isEnriched = tx.merchant != null;
+    final categoryStyle = resolveCategoryStyle(tag: tx.tag, merchant: tx.merchant);
+    final categoryLabel = displayCategoryLabel(tag: tx.tag, merchant: tx.merchant);
+    final isEnriched = tx.merchant != null && tx.syncStatus == SyncStatus.completed;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -440,21 +578,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: Row(
         children: [
-          // Category Icon/Avatar
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFF0F101A),
+              color: categoryStyle.color.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              isEnriched ? Icons.storefront_rounded : Icons.label_outline_rounded,
-              color: isEnriched ? const Color(0xFF06B6D4) : Colors.white60,
+              categoryStyle.icon,
+              color: categoryStyle.color,
             ),
           ),
           const SizedBox(width: 16),
 
-          // Details
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -468,24 +604,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontSize: 15,
                   ),
                 ),
+                const SizedBox(height: 2),
+                Text(
+                  DateFormat('MMM d, yyyy').format(tx.createdAt),
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                ),
                 const SizedBox(height: 4),
                 Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.05),
+                        color: categoryStyle.color.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        '#$displayTag',
+                        '#$categoryLabel',
                         style: TextStyle(
                           fontSize: 10,
-                          color: isEnriched ? const Color(0xFF06B6D4) : Colors.grey[400],
+                          color: categoryStyle.color,
                           fontWeight: isEnriched ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
                     ),
+                    if (tx.tag.toLowerCase() != categoryLabel.toLowerCase()) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '#${tx.tag}',
+                          style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+                        ),
+                      ),
+                    ],
                     if (tx.isRecurring) ...[
                       const SizedBox(width: 6),
                       Container(
@@ -522,10 +677,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
 
-          // Price and Sync Status
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              PopupMenuButton<String>(
+                icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[500]),
+                color: const Color(0xFF1E1F30),
+                onSelected: (action) {
+                  if (action == 'edit') _editTransaction(tx);
+                  if (action == 'delete') _deleteTransaction(tx);
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
+              ),
               Text(
                 '\$${tx.amount.toStringAsFixed(2)}',
                 style: const TextStyle(

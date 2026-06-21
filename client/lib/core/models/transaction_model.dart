@@ -2,6 +2,13 @@ import 'package:uuid/uuid.dart';
 
 enum SyncStatus { pending, processing, completed, failed }
 
+class _DateExtraction {
+  final DateTime? date;
+  final String remaining;
+
+  const _DateExtraction({this.date, required this.remaining});
+}
+
 class TransactionModel {
   final String id;
   final String rawInput;
@@ -30,21 +37,20 @@ class TransactionModel {
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
-  static TransactionModel parse(String input) {
+  static TransactionModel parse(String input, {DateTime? defaultDate}) {
     final cleanInput = input.trim();
-    
-    // 1. Extract the first matching number (decimal or integer)
+    final dateExtraction = _extractDate(cleanInput);
+    final parseText = dateExtraction.remaining;
+
     final amountRegex = RegExp(r'\d+(\.\d{1,2})?');
-    final amountMatch = amountRegex.firstMatch(cleanInput);
+    final amountMatch = amountRegex.firstMatch(parseText);
     final amount = amountMatch != null ? double.parse(amountMatch.group(0)!) : 0.0;
 
-    // 2. Extract a tag starting with '#' or '@'
     final tagRegex = RegExp(r'[#@](\w+)');
-    final tagMatch = tagRegex.firstMatch(cleanInput);
+    final tagMatch = tagRegex.firstMatch(parseText);
     final tag = tagMatch != null ? tagMatch.group(1)!.toLowerCase() : 'uncategorized';
 
-    // 3. Clean remaining text for description
-    String description = cleanInput
+    String description = parseText
         .replaceAll(amountMatch?.group(0) ?? '', '')
         .replaceAll(tagMatch?.group(0) ?? '', '')
         .replaceAll(RegExp(r'\s+'), ' ')
@@ -54,6 +60,10 @@ class TransactionModel {
       description = "Expense under $tag";
     }
 
+    final transactionDate = dateExtraction.date != null
+        ? _withCurrentTime(dateExtraction.date!)
+        : (defaultDate ?? DateTime.now());
+
     return TransactionModel(
       id: const Uuid().v4(),
       rawInput: cleanInput,
@@ -61,7 +71,90 @@ class TransactionModel {
       description: description,
       tag: tag,
       syncStatus: SyncStatus.pending,
+      createdAt: transactionDate,
     );
+  }
+
+  static _DateExtraction _extractDate(String input) {
+    var text = input.trim();
+    final lower = text.toLowerCase();
+
+    if (lower.startsWith('today')) {
+      final remaining = text.length > 5 ? text.substring(5).trim() : '';
+      return _DateExtraction(date: _dateOnly(DateTime.now()), remaining: remaining);
+    }
+
+    if (lower.startsWith('yesterday')) {
+      final remaining = text.length > 9 ? text.substring(9).trim() : '';
+      return _DateExtraction(
+        date: _dateOnly(DateTime.now().subtract(const Duration(days: 1))),
+        remaining: remaining,
+      );
+    }
+
+    final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})(?:\b|\s)');
+    var match = iso.firstMatch(text);
+    if (match != null) {
+      final date = _safeDate(
+        int.parse(match.group(1)!),
+        int.parse(match.group(2)!),
+        int.parse(match.group(3)!),
+      );
+      if (date != null) {
+        return _DateExtraction(date: date, remaining: text.substring(match.end).trim());
+      }
+    }
+
+    final slash = RegExp(r'^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?(?:\b|\s)');
+    match = slash.firstMatch(text);
+    if (match != null) {
+      final date = _parseMonthDayYear(
+        int.parse(match.group(1)!),
+        int.parse(match.group(2)!),
+        match.group(3),
+      );
+      if (date != null) {
+        return _DateExtraction(date: date, remaining: text.substring(match.end).trim());
+      }
+    }
+
+    final dashed = RegExp(r'^(\d{1,2})-(\d{1,2})(?:-(\d{2,4}))?(?:\b|\s)');
+    match = dashed.firstMatch(text);
+    if (match != null) {
+      final date = _parseMonthDayYear(
+        int.parse(match.group(1)!),
+        int.parse(match.group(2)!),
+        match.group(3),
+      );
+      if (date != null) {
+        return _DateExtraction(date: date, remaining: text.substring(match.end).trim());
+      }
+    }
+
+    return _DateExtraction(remaining: text);
+  }
+
+  static DateTime? _parseMonthDayYear(int month, int day, String? yearText) {
+    final year = yearText == null
+        ? DateTime.now().year
+        : (yearText.length == 2 ? 2000 + int.parse(yearText) : int.parse(yearText));
+    return _safeDate(year, month, day);
+  }
+
+  static DateTime? _safeDate(int year, int month, int day) {
+    try {
+      return DateTime(year, month, day);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static DateTime _dateOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
+
+  static DateTime _withCurrentTime(DateTime date) {
+    final now = DateTime.now();
+    return DateTime(date.year, date.month, date.day, now.hour, now.minute, now.second);
   }
 
   Map<String, dynamic> toMap() {
@@ -96,6 +189,20 @@ class TransactionModel {
       ),
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+    );
+  }
+
+  TransactionModel reparse(String input) {
+    final parsed = TransactionModel.parse(input, defaultDate: createdAt);
+    return TransactionModel(
+      id: id,
+      rawInput: parsed.rawInput,
+      amount: parsed.amount,
+      description: parsed.description,
+      tag: parsed.tag,
+      syncStatus: SyncStatus.pending,
+      createdAt: parsed.createdAt,
+      updatedAt: DateTime.now(),
     );
   }
 
