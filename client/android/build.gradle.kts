@@ -17,14 +17,13 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 
-    pluginManager.withPlugin("com.android.library") {
-        extensions.configure<LibraryExtension>("android") {
-            compileSdk = 36
+    afterEvaluate {
+        extensions.findByType<LibraryExtension>()?.apply {
+            if (compileSdk == null || compileSdk!! < 36) {
+                compileSdk = 36
+            }
         }
     }
-}
-subprojects {
-    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {

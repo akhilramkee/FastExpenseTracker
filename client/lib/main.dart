@@ -214,7 +214,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     if (_isImporting) return;
 
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['txt', 'csv', 'text'],
       withData: true,
