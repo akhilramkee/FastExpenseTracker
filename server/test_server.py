@@ -58,10 +58,57 @@ def test_sync():
         print(f"Error testing sync: {e}")
         return False
 
+def test_import():
+    print("\nTesting /api/v1/import endpoint...")
+    payload = {
+        "content": "1450 zoom subscription renewal @work\n45.90 dinner @night #food",
+        "format": "text",
+    }
+
+    try:
+        before_response = httpx.get(f"{BASE_URL}/api/v1/sync/status", timeout=10.0)
+        before_count = len(before_response.json()) if before_response.status_code == 200 else 0
+
+        response = httpx.post(f"{BASE_URL}/api/v1/import", json=payload, timeout=15.0)
+        print(f"Import status code: {response.status_code}")
+        print(f"Response body: {response.json()}")
+
+        if response.status_code != 202:
+            return False
+
+        data = response.json()
+        if data.get("status") != "accepted":
+            return False
+
+        print("Import accepted; polling sync/status for background results...")
+        for attempt in range(1, 31):
+            print(f"Attempt {attempt}: Checking for imported transactions...")
+            status_response = httpx.get(f"{BASE_URL}/api/v1/sync/status", timeout=10.0)
+            if status_response.status_code == 200:
+                rows = status_response.json()
+                if len(rows) > before_count:
+                    imported = rows[before_count:]
+                    print(f"Found {len(imported)} new transaction(s) from import.")
+                    for row in imported:
+                        print(
+                            f"  - {row.get('display_label') or row.get('description')} "
+                            f"({row.get('amount')}) status={row.get('sync_status')}"
+                        )
+                    if all(row.get("sync_status") in ("completed", "failed") for row in imported):
+                        return True
+            time.sleep(5)
+
+        print("Timed out waiting for imported transactions to appear.")
+        return False
+    except Exception as e:
+        print(f"Error testing import: {e}")
+        return False
+
 if __name__ == "__main__":
     print("Expense Tracker Server Integration Test")
     print("=======================================")
     if test_health():
         test_sync()
+        test_import()
     else:
         print("Server is not running. Please start the FastAPI server first.")

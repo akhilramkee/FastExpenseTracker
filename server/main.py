@@ -3,7 +3,8 @@ import json
 import logging
 import asyncio
 import datetime
-from typing import List, Optional
+import uuid
+from typing import List, Literal, Optional
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -33,9 +34,10 @@ app.add_middleware(
 
 # Initialize database tables on startup
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     init_db()
     logger.info("Database initialized successfully.")
+    asyncio.create_task(recover_stuck_enrichments())
 
 # Pydantic Schemas
 class TransactionSyncItem(BaseModel):
@@ -44,6 +46,7 @@ class TransactionSyncItem(BaseModel):
     amount: float
     description: Optional[str] = None
     tag: Optional[str] = None
+    display_label: Optional[str] = Field(None, alias="display_label")
     sync_status: str = "pending"
     created_at: Optional[str] = None
 
@@ -64,6 +67,7 @@ class EnrichedTransactionResponse(BaseModel):
     description: Optional[str]
     tag: Optional[str]
     merchant: Optional[str]
+    display_label: Optional[str] = None
     ai_confidence: Optional[float]
     is_recurring: bool
     sync_status: str
@@ -72,6 +76,14 @@ class EnrichedTransactionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ImportRequest(BaseModel):
+    content: str
+    format: Literal["text", "csv"] = "text"
+
+class ImportResponse(BaseModel):
+    status: str
+    message: str
 
 class DeleteSyncRequest(BaseModel):
     ids: List[str]
@@ -90,8 +102,37 @@ You must format output streams to match the parameters of this designated JSON s
   "category": string,
   "confidence": float (range 0.00 to 1.00),
   "merchant": string or null,
-  "is_recurring": boolean
-}"""
+  "is_recurring": boolean,
+  "display_label": string
+}
+
+The display_label must be a short (max 50 characters), title-case, human-readable summary suitable for a mobile UI.
+Do not include hashtags, currency symbols, or raw tag markers in display_label.
+Example: "Zoom Subscription Renewal" instead of "zoom subscription renewal @work"."""
+
+OLLAMA_IMPORT_SYSTEM_PROMPT = """You are a bulk financial transaction import parser.
+Accept multi-line plain text or CSV file content and extract every expense transaction.
+
+Return JSON matching this schema:
+{
+  "transactions": [
+    {
+      "raw_input": "original line or CSV row text exactly as provided",
+      "amount": float,
+      "description": "fallback plain description without tags or currency symbols",
+      "tag": "category tag string",
+      "display_label": "short human-readable title, max 50 chars, title-case",
+      "created_at": "YYYY-MM-DD or null if unknown"
+    }
+  ]
+}
+
+Rules:
+- One transaction per non-empty line (text) or data row (CSV).
+- Date lines (e.g. MM/DD or MM/DD/YYYY on their own line) apply to following transactions until the next date line.
+- Skip header rows in CSV files.
+- display_label must be user-friendly and suitable for a 2-line mobile UI label.
+- Preserve raw_input verbatim for each parsed entry."""
 
 def parse_client_datetime(value: Optional[str]) -> Optional[datetime.datetime]:
     if not value:
@@ -105,6 +146,34 @@ def apply_client_created_at(db_tx: Transaction, item: TransactionSyncItem) -> No
     parsed = parse_client_datetime(item.created_at)
     if parsed:
         db_tx.created_at = parsed
+
+def apply_import_created_at(db_tx: Transaction, created_at: Optional[str]) -> None:
+    parsed = parse_client_datetime(created_at)
+    if parsed:
+        db_tx.created_at = parsed
+
+def transaction_to_response(tx: Transaction) -> EnrichedTransactionResponse:
+    return EnrichedTransactionResponse(
+        id=tx.id,
+        raw_input=tx.raw_input,
+        amount=tx.amount,
+        description=tx.description or "",
+        tag=tx.tag or "",
+        merchant=tx.merchant,
+        display_label=tx.display_label,
+        ai_confidence=tx.ai_confidence,
+        is_recurring=tx.is_recurring,
+        sync_status=tx.sync_status,
+        created_at=tx.created_at.isoformat(),
+        updated_at=tx.updated_at.isoformat(),
+    )
+
+def clear_enrichment_fields(db_tx: Transaction) -> None:
+    db_tx.merchant = None
+    db_tx.display_label = None
+    db_tx.ai_confidence = None
+    db_tx.is_recurring = False
+    db_tx.sync_status = "pending"
 
 class EnrichmentManager:
     """Tracks in-flight Ollama jobs so retries never cancel an active enrichment."""
@@ -138,7 +207,13 @@ class EnrichmentManager:
             # Errors are logged and persisted inside _run_enrichment.
             pass
 
-    async def _call_ollama(self, raw_input: str) -> dict:
+    async def _call_ollama(
+        self,
+        raw_input: str,
+        system_prompt: str = OLLAMA_SYSTEM_PROMPT,
+        *,
+        think: Optional[bool] = None,
+    ) -> dict:
         timeout = httpx.Timeout(
             connect=10.0,
             read=OLLAMA_HARD_TIMEOUT,
@@ -148,16 +223,22 @@ class EnrichmentManager:
         payload = {
             "model": OLLAMA_MODEL,
             "messages": [
-                {"role": "system", "content": OLLAMA_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": raw_input},
             ],
             "format": "json",
             "stream": False,
             "options": {"temperature": 0.1},
         }
+        if think is not None:
+            payload["think"] = think
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            logger.info(f"Sending request to Ollama: {OLLAMA_URL}/api/chat with model {OLLAMA_MODEL}")
+            think_note = f", think={think}" if think is not None else ""
+            logger.info(
+                f"Sending request to Ollama: {OLLAMA_URL}/api/chat "
+                f"with model {OLLAMA_MODEL}{think_note}"
+            )
             response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
 
         if response.status_code != 200:
@@ -185,6 +266,8 @@ class EnrichmentManager:
         db_tx.merchant = result.get("merchant")
         if result.get("category"):
             db_tx.tag = result.get("category")
+        if result.get("display_label"):
+            db_tx.display_label = result.get("display_label")
         db_tx.ai_confidence = result.get("confidence", 1.0)
         db_tx.is_recurring = result.get("is_recurring", False)
         db_tx.sync_status = "completed"
@@ -210,7 +293,7 @@ class EnrichmentManager:
             db_session.commit()
 
             try:
-                result = await self._call_ollama(raw_input)
+                result = await self._call_ollama(raw_input, think=False)
                 self._apply_enrichment(db_session, tx_id, result)
             except httpx.TimeoutException:
                 logger.error(
@@ -228,6 +311,41 @@ class EnrichmentManager:
 
 
 enrichment_manager = EnrichmentManager()
+
+async def recover_stuck_enrichments() -> None:
+    """Re-queue or finalize transactions left in processing after a crash or slow import."""
+    await asyncio.sleep(1)
+    db_session = SessionLocal()
+    try:
+        stuck = db_session.query(Transaction).filter(Transaction.sync_status == "processing").all()
+        if not stuck:
+            return
+
+        logger.info(f"Recovering {len(stuck)} transaction(s) stuck in processing")
+        finalized = 0
+        requeued: List[str] = []
+
+        for db_tx in stuck:
+            if enrichment_manager.is_in_flight(db_tx.id):
+                continue
+            if db_tx.display_label:
+                db_tx.sync_status = "completed"
+                db_session.commit()
+                finalized += 1
+                logger.info(f"Finalized imported transaction {db_tx.id} (already has display_label)")
+            else:
+                requeued.append(db_tx.id)
+
+        if finalized:
+            logger.info(f"Marked {finalized} imported transaction(s) as completed")
+
+        for tx_id in requeued:
+            db_tx = db_session.query(Transaction).filter(Transaction.id == tx_id).first()
+            if db_tx:
+                logger.info(f"Re-queuing enrichment for stuck transaction {tx_id}")
+                await enrich_transaction_with_ollama(db_tx.id, db_tx.raw_input)
+    finally:
+        db_session.close()
 
 async def enrich_transaction_with_ollama(tx_id: str, raw_input: str, db_session: Optional[Session] = None):
     await enrichment_manager.ensure_enrichment(tx_id, raw_input)
@@ -263,10 +381,7 @@ async def run_sync_pipeline(items: List[TransactionSyncItem]):
                 db_tx.tag = item.tag
                 apply_client_created_at(db_tx, item)
                 if content_changed:
-                    db_tx.merchant = None
-                    db_tx.ai_confidence = None
-                    db_tx.is_recurring = False
-                    db_tx.sync_status = "pending"
+                    clear_enrichment_fields(db_tx)
                 db_session.commit()
 
             if db_tx.sync_status in ("pending", "failed"):
@@ -278,6 +393,88 @@ async def run_sync_pipeline(items: List[TransactionSyncItem]):
                 await enrich_transaction_with_ollama(db_tx.id, db_tx.raw_input)
     finally:
         db_session.close()
+
+async def call_ollama_import(content: str, file_format: str) -> List[dict]:
+    user_content = f"Format: {file_format}\n\n{content}"
+    result = await enrichment_manager._call_ollama(
+        user_content,
+        system_prompt=OLLAMA_IMPORT_SYSTEM_PROMPT,
+        think=False,
+    )
+    transactions = result.get("transactions", [])
+    if not isinstance(transactions, list):
+        raise ValueError("Import response missing transactions array")
+    return transactions
+
+async def run_import_pipeline(content: str, file_format: str) -> None:
+    line_count = len([line for line in content.splitlines() if line.strip()])
+    logger.info(
+        f"Starting background import pipeline: format={file_format}, "
+        f"chars={len(content)}, non_empty_lines={line_count}"
+    )
+
+    try:
+        logger.info("Calling Ollama to parse import file")
+        parsed_items = await call_ollama_import(content, file_format)
+        logger.info(f"Ollama returned {len(parsed_items)} parsed item(s)")
+    except Exception as e:
+        logger.error(f"Background import parsing failed: {e}", exc_info=True)
+        return
+
+    if not parsed_items:
+        logger.warning("Import file contained no parseable transactions")
+        return
+
+    db_session = SessionLocal()
+    tx_ids: List[str] = []
+    skipped = 0
+    try:
+        for item in parsed_items:
+            if not isinstance(item, dict):
+                skipped += 1
+                logger.warning(f"Skipping non-dict import row: {item!r}")
+                continue
+            raw_input = (item.get("raw_input") or "").strip()
+            amount = item.get("amount")
+            if not raw_input or amount is None:
+                skipped += 1
+                logger.warning(f"Skipping invalid import row: {item}")
+                continue
+
+            tx_id = str(uuid.uuid4())
+            db_tx = Transaction(
+                id=tx_id,
+                raw_input=raw_input,
+                amount=float(amount),
+                description=item.get("description") or raw_input,
+                tag=item.get("tag") or "uncategorized",
+                display_label=item.get("display_label"),
+                sync_status="completed",
+            )
+            apply_import_created_at(db_tx, item.get("created_at"))
+            db_session.add(db_tx)
+            tx_ids.append(tx_id)
+            logger.info(
+                f"Queued import transaction {tx_id}: amount={db_tx.amount}, "
+                f"raw_input={raw_input!r}"
+            )
+
+        db_session.commit()
+        logger.info(
+            f"Background import persisted {len(tx_ids)} transaction(s) "
+            f"({skipped} row(s) skipped)"
+        )
+    except Exception as e:
+        logger.error(f"Background import failed while saving transactions: {e}", exc_info=True)
+        return
+    finally:
+        db_session.close()
+
+    if not tx_ids:
+        logger.warning("Import pipeline finished with no transactions saved")
+        return
+
+    logger.info(f"Background import pipeline finished for {len(tx_ids)} transaction(s)")
 
 # Endpoints
 
@@ -321,10 +518,7 @@ def sync_transactions(
             db_tx.tag = item.tag
             apply_client_created_at(db_tx, item)
             if content_changed:
-                db_tx.merchant = None
-                db_tx.ai_confidence = None
-                db_tx.is_recurring = False
-                db_tx.sync_status = "pending"
+                clear_enrichment_fields(db_tx)
     db.commit()
 
     # Dispatch to background task execution
@@ -351,25 +545,23 @@ def get_sync_status(
         query = query.filter(Transaction.id.in_(id_list))
     
     transactions = query.all()
-    
-    response_items = []
-    for tx in transactions:
-        response_items.append(
-            EnrichedTransactionResponse(
-                id=tx.id,
-                raw_input=tx.raw_input,
-                amount=tx.amount,
-                description=tx.description or "",
-                tag=tx.tag or "",
-                merchant=tx.merchant,
-                ai_confidence=tx.ai_confidence,
-                is_recurring=tx.is_recurring,
-                sync_status=tx.sync_status,
-                created_at=tx.created_at.isoformat(),
-                updated_at=tx.updated_at.isoformat()
-            )
-        )
-    return response_items
+    return [transaction_to_response(tx) for tx in transactions]
+
+@app.post("/api/v1/import", status_code=status.HTTP_202_ACCEPTED, response_model=ImportResponse)
+async def import_transactions(
+    payload: ImportRequest,
+    background_tasks: BackgroundTasks,
+):
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Import content cannot be empty")
+
+    background_tasks.add_task(run_import_pipeline, content, payload.format)
+
+    return ImportResponse(
+        status="accepted",
+        message="Import submitted; transactions will appear after the next sync",
+    )
 
 @app.post("/api/v1/sync/deletes", response_model=DeleteSyncResponse)
 def sync_deletes(payload: DeleteSyncRequest, db: Session = Depends(get_db)):
@@ -414,29 +606,14 @@ def update_transaction(
     db_tx.tag = item.tag
     apply_client_created_at(db_tx, item)
     if content_changed:
-        db_tx.merchant = None
-        db_tx.ai_confidence = None
-        db_tx.is_recurring = False
-        db_tx.sync_status = "pending"
+        clear_enrichment_fields(db_tx)
     db.commit()
     db.refresh(db_tx)
 
-    if db_tx.sync_status in ("pending", "failed", "processing"):
+    if content_changed or db_tx.sync_status in ("pending", "failed", "processing"):
         background_tasks.add_task(run_sync_pipeline, [item])
 
-    return EnrichedTransactionResponse(
-        id=db_tx.id,
-        raw_input=db_tx.raw_input,
-        amount=db_tx.amount,
-        description=db_tx.description or "",
-        tag=db_tx.tag or "",
-        merchant=db_tx.merchant,
-        ai_confidence=db_tx.ai_confidence,
-        is_recurring=db_tx.is_recurring,
-        sync_status=db_tx.sync_status,
-        created_at=db_tx.created_at.isoformat(),
-        updated_at=db_tx.updated_at.isoformat(),
-    )
+    return transaction_to_response(db_tx)
 
 @app.get("/health")
 def health_check():

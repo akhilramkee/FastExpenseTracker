@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:file_picker/file_picker.dart';
 
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
@@ -63,6 +65,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   
   List<TransactionModel> _transactions = [];
   bool _isSyncing = false;
+  bool _isImporting = false;
   bool _isLoading = true;
   bool _serverOnline = false;
   String _livePreviewText = "Type something like: 1450 zoom subscription renewal @work";
@@ -201,6 +204,84 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _importFromFile() async {
+    if (!_serverOnline) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Server offline — import requires a connection')),
+      );
+      return;
+    }
+    if (_isImporting) return;
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['txt', 'csv', 'text'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.single;
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not read the selected file')),
+      );
+      return;
+    }
+
+    final content = utf8.decode(bytes);
+    if (content.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The selected file is empty')),
+      );
+      return;
+    }
+
+    final format = file.extension?.toLowerCase() == 'csv' ? 'csv' : 'text';
+
+    setState(() {
+      _isImporting = true;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Submitting import…')),
+      );
+    }
+
+    try {
+      await _syncWorker.submitImport(
+        content: content,
+        format: format,
+      );
+
+      _triggerSync();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Import submitted — transactions will appear after sync'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isImporting = false;
+        });
+      }
+    }
+  }
+
   Future<void> _editTransaction(TransactionModel tx) async {
     final controller = TextEditingController(text: tx.rawInput);
     final result = await showDialog<String>(
@@ -236,7 +317,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final updated = tx.reparse(result.trim());
     await _dbHelper.updateTransaction(updated);
     await _loadTransactions();
-    _triggerSync();
+
+    if (_serverOnline) {
+      await _syncWorker.syncEditedTransaction(updated);
+      await _loadTransactions();
+    }
   }
 
   Future<void> _deleteTransaction(TransactionModel tx) async {
@@ -246,7 +331,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         backgroundColor: const Color(0xFF1E1F30),
         title: const Text('Delete expense?'),
         content: Text(
-          'Remove "${tx.description}" (${formatCurrency(tx.amount)})? This will sync the deletion to the server.',
+          'Remove "${tx.displayTitle}" (${formatCurrency(tx.amount)})? This will sync the deletion to the server.',
         ),
         actions: [
           TextButton(
@@ -431,6 +516,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           hintText: 'Add expense (e.g. 06/20 45.90 dinner @night #food)',
                           hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
                           border: InputBorder.none,
+                          prefixIcon: IconButton(
+                            tooltip: 'Import from file',
+                            onPressed: _serverOnline && !_isImporting ? _importFromFile : null,
+                            icon: _isImporting
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : Icon(
+                                    Icons.upload_file_rounded,
+                                    color: _serverOnline
+                                        ? const Color(0xFF8B5CF6)
+                                        : Colors.grey[600],
+                                  ),
+                          ),
                           suffixIcon: IconButton(
                             icon: const Icon(Icons.arrow_forward_rounded),
                             onPressed: _saveTransaction,
@@ -616,14 +717,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  tx.description,
-                  maxLines: 1,
+                  tx.displayTitle,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
+                  softWrap: true,
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 15,
                   ),
                 ),
+                if (tx.displayLabel != null &&
+                    tx.displayLabel!.isNotEmpty &&
+                    tx.rawInput.trim() != tx.displayLabel!.trim()) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    tx.rawInput,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                  ),
+                ],
                 const SizedBox(height: 2),
                 Text(
                   DateFormat('MMM d, yyyy').format(tx.createdAt),

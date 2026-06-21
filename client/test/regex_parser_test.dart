@@ -91,6 +91,39 @@ void main() {
       expect(edited.createdAt.day, 10);
     });
 
+    test('should parse amount at end when name contains digits', () {
+      const input = "Zee5 subscription annual 799";
+      final tx = TransactionModel.parse(input);
+
+      expect(tx.amount, 799.0);
+      expect(tx.description, "Zee5 subscription annual");
+    });
+
+    test('reparse should clear enrichment fields and mark pending', () {
+      final original = TransactionModel(
+        id: 'test-id',
+        rawInput: '799 Zee5 subscription',
+        amount: 799,
+        description: 'Zee5 subscription',
+        tag: 'entertainment',
+        merchant: 'Zee5',
+        displayLabel: 'Zee5 Subscription',
+        aiConfidence: 0.95,
+        isRecurring: true,
+        syncStatus: SyncStatus.completed,
+        createdAt: DateTime(2026, 6, 12),
+      );
+
+      final edited = original.reparse('799 Zee5 annual subscription');
+
+      expect(edited.amount, 799.0);
+      expect(edited.syncStatus, SyncStatus.pending);
+      expect(edited.merchant, isNull);
+      expect(edited.displayLabel, isNull);
+      expect(edited.aiConfidence, isNull);
+      expect(edited.isRecurring, isFalse);
+    });
+
     test('should parse amount with Rs. prefix', () {
       const input = "Rs. 1450 zoom subscription @work";
       final tx = TransactionModel.parse(input);

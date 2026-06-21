@@ -22,7 +22,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -37,6 +37,7 @@ class DatabaseHelper {
         description TEXT NOT NULL,
         tag TEXT NOT NULL,
         merchant TEXT,
+        display_label TEXT,
         ai_confidence REAL,
         is_recurring INTEGER DEFAULT 0,
         sync_status TEXT DEFAULT 'pending',
@@ -58,6 +59,9 @@ class DatabaseHelper {
           id TEXT PRIMARY KEY
         )
       ''');
+    }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE transactions ADD COLUMN display_label TEXT');
     }
   }
 

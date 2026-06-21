@@ -13,6 +13,7 @@ class SyncWorker {
   static const String syncUrl = '$baseUrl/api/v1/sync';
   static const String deletesUrl = '$baseUrl/api/v1/sync/deletes';
   static const String statusUrl = '$baseUrl/api/v1/sync/status';
+  static const String importUrl = '$baseUrl/api/v1/import';
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
@@ -103,11 +104,19 @@ class SyncWorker {
       if (response.statusCode != 200) return false;
 
       final pendingDeletes = (await _dbHelper.getPendingDeletes()).toSet();
+      final localTransactions = await _dbHelper.getTransactions();
+      final localPendingIds = localTransactions
+          .where((tx) =>
+              tx.syncStatus == SyncStatus.pending ||
+              tx.syncStatus == SyncStatus.failed)
+          .map((tx) => tx.id)
+          .toSet();
       final List<dynamic> data = jsonDecode(response.body);
 
       for (final item in data) {
         final serverTx = TransactionModel.fromMap(item as Map<String, dynamic>);
         if (pendingDeletes.contains(serverTx.id)) continue;
+        if (localPendingIds.contains(serverTx.id)) continue;
         await _dbHelper.insertTransaction(serverTx);
       }
       return true;
@@ -147,10 +156,64 @@ class SyncWorker {
   }
 
   Future<bool> syncAll() async {
-    await restoreFromServer();
     await syncPendingDeletes();
     final pushed = await performBackgroundSync();
     await pullSyncUpdates();
+    await restoreFromServer();
     return pushed;
+  }
+
+  Future<bool> pushEditedTransaction(TransactionModel tx) async {
+    if (!await isServerReachable()) return false;
+
+    try {
+      await _dbHelper.updateSyncStatus(tx.id, SyncStatus.processing);
+
+      final response = await http
+          .put(
+            Uri.parse('$baseUrl/api/v1/transactions/${tx.id}'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(tx.toMap()),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return true;
+      }
+
+      await _dbHelper.updateSyncStatus(tx.id, SyncStatus.failed);
+      return false;
+    } catch (_) {
+      await _dbHelper.updateSyncStatus(tx.id, SyncStatus.failed);
+      return false;
+    }
+  }
+
+  Future<void> syncEditedTransaction(TransactionModel tx) async {
+    final pushed = await pushEditedTransaction(tx);
+    if (pushed) {
+      await pullSyncUpdates();
+    }
+  }
+
+  Future<void> submitImport({
+    required String content,
+    required String format,
+  }) async {
+    if (!await isServerReachable()) {
+      throw Exception('Server is unreachable');
+    }
+
+    final response = await http
+        .post(
+          Uri.parse(importUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'content': content, 'format': format}),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 202) {
+      throw Exception('Import failed (${response.statusCode}): ${response.body}');
+    }
   }
 }

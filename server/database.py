@@ -1,7 +1,10 @@
 import datetime
-from sqlalchemy import create_engine, Column, String, Float, Boolean, DateTime
+import logging
+from sqlalchemy import create_engine, Column, String, Float, Boolean, DateTime, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+
+logger = logging.getLogger("expense_tracker_server")
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./transactions.db"
 
@@ -21,14 +24,25 @@ class Transaction(Base):
     description = Column(String, nullable=True)
     tag = Column(String(50), nullable=True)
     merchant = Column(String(100), nullable=True)
+    display_label = Column(String(150), nullable=True)
     ai_confidence = Column(Float, nullable=True)
     is_recurring = Column(Boolean, default=False)
     sync_status = Column(String(20), default="pending")  # pending, processing, completed, failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
+def _migrate_display_label():
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN display_label TEXT"))
+            conn.commit()
+            logger.info("Added display_label column to transactions table.")
+        except Exception:
+            conn.rollback()
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_display_label()
 
 def get_db():
     db = SessionLocal()

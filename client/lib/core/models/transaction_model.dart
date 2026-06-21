@@ -18,6 +18,7 @@ class TransactionModel {
   final String description;
   final String tag;
   final String? merchant;
+  final String? displayLabel;
   final double? aiConfidence;
   final bool isRecurring;
   final SyncStatus syncStatus;
@@ -31,6 +32,7 @@ class TransactionModel {
     required this.description,
     required this.tag,
     this.merchant,
+    this.displayLabel,
     this.aiConfidence,
     this.isRecurring = false,
     this.syncStatus = SyncStatus.pending,
@@ -39,21 +41,28 @@ class TransactionModel {
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
+  String get displayTitle =>
+      displayLabel != null && displayLabel!.isNotEmpty ? displayLabel! : description;
+
   static TransactionModel parse(String input, {DateTime? defaultDate}) {
     final cleanInput = input.trim();
     final dateExtraction = _extractDate(cleanInput);
     final parseText = dateExtraction.remaining;
 
     final amountRegex = RegExp(r'\d+(\.\d{1,2})?');
-    final amountMatch = amountRegex.firstMatch(parseText);
+    final amountMatches = amountRegex.allMatches(parseText).toList();
+    final amountMatch = amountMatches.isNotEmpty ? amountMatches.last : null;
     final amount = amountMatch != null ? double.parse(amountMatch.group(0)!) : 0.0;
 
     final tagRegex = RegExp(r'[#@](\w+)');
     final tagMatch = tagRegex.firstMatch(parseText);
     final tag = tagMatch != null ? tagMatch.group(1)!.toLowerCase() : 'uncategorized';
 
-    String description = parseText
-        .replaceAll(amountMatch?.group(0) ?? '', '')
+    String description = parseText;
+    if (amountMatch != null) {
+      description = '${parseText.substring(0, amountMatch.start)}${parseText.substring(amountMatch.end)}';
+    }
+    description = description
         .replaceAll(tagMatch?.group(0) ?? '', '')
         .replaceAll(currencyMarkerPattern, '')
         .replaceAll(RegExp(r'\s+'), ' ')
@@ -168,6 +177,7 @@ class TransactionModel {
       'description': description,
       'tag': tag,
       'merchant': merchant,
+      'display_label': displayLabel,
       'ai_confidence': aiConfidence,
       'is_recurring': isRecurring ? 1 : 0,
       'sync_status': syncStatus.name,
@@ -184,6 +194,7 @@ class TransactionModel {
       description: map['description'] as String,
       tag: map['tag'] as String,
       merchant: map['merchant'] as String?,
+      displayLabel: map['display_label'] as String?,
       aiConfidence: map['ai_confidence'] != null ? (map['ai_confidence'] as num).toDouble() : null,
       isRecurring: map['is_recurring'] == 1 || map['is_recurring'] == true,
       syncStatus: SyncStatus.values.firstWhere(
@@ -203,6 +214,10 @@ class TransactionModel {
       amount: parsed.amount,
       description: parsed.description,
       tag: parsed.tag,
+      merchant: null,
+      displayLabel: null,
+      aiConfidence: null,
+      isRecurring: false,
       syncStatus: SyncStatus.pending,
       createdAt: parsed.createdAt,
       updatedAt: DateTime.now(),
@@ -216,6 +231,7 @@ class TransactionModel {
     String? description,
     String? tag,
     String? merchant,
+    String? displayLabel,
     double? aiConfidence,
     bool? isRecurring,
     SyncStatus? syncStatus,
@@ -229,6 +245,7 @@ class TransactionModel {
       description: description ?? this.description,
       tag: tag ?? this.tag,
       merchant: merchant ?? this.merchant,
+      displayLabel: displayLabel ?? this.displayLabel,
       aiConfidence: aiConfidence ?? this.aiConfidence,
       isRecurring: isRecurring ?? this.isRecurring,
       syncStatus: syncStatus ?? this.syncStatus,
