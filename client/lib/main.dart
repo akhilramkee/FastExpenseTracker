@@ -31,7 +31,7 @@ class ExpenseTrackerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AuraExpense',
+      title: 'TapEx',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0F101A),
@@ -63,6 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   
   List<TransactionModel> _transactions = [];
   bool _isSyncing = false;
+  bool _isLoading = true;
   bool _serverOnline = false;
   String _livePreviewText = "Type something like: 1450 zoom subscription renewal @work";
   Timer? _statusPollTimer;
@@ -88,7 +89,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _loadTransactions();
+    _initializeData();
     _checkServerStatus();
     
     // Check server status periodically
@@ -124,6 +125,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _serverOnline = online;
       });
+    }
+  }
+
+  Future<void> _initializeData() async {
+    try {
+      await _syncWorker.syncAll();
+      await _loadTransactions();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -271,233 +285,238 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final formatter = currencyFormatter;
     final isFiltered = _selectedCategoryFilter != null;
 
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header section
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
+          child: CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'TapEx',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: -0.5,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _serverOnline ? Colors.greenAccent : Colors.redAccent,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _serverOnline ? 'Tailscale Online' : 'Offline Mode',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[400],
+                              ),
+                            ),
+                          ],
+                        )
+                      ],
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: _triggerSync,
+                      icon: _isSyncing
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Icon(Icons.sync),
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF1E1F30),
+                        foregroundColor: Colors.white,
+                      ),
+                    )
+                  ],
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              SliverToBoxAdapter(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(24),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF8B5CF6), Color(0xFF06B6D4)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
+                      )
+                    ],
+                  ),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'AuraExpense',
+                      Text(
+                        'TOTAL SPENT',
                         style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: -0.5,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white.withValues(alpha: 0.8),
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        formatter.format(totalExpense),
+                        style: const TextStyle(
+                          fontSize: 36,
+                          fontWeight: FontWeight.w900,
                           color: Colors.white,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _serverOnline ? Colors.greenAccent : Colors.redAccent,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _serverOnline ? 'Tailscale Online' : 'Offline Mode',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[400],
-                            ),
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
-                  // Sync Button
-                  IconButton.filledTonal(
-                    onPressed: _triggerSync,
-                    icon: _isSyncing
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : const Icon(Icons.sync),
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF1E1F30),
-                      foregroundColor: Colors.white,
-                    ),
-                  )
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // Total Expense Glassmorphic Card
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF8B5CF6), Color(0xFF06B6D4)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
-                    )
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'TOTAL SPENT',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white.withValues(alpha: 0.8),
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      formatter.format(totalExpense),
-                      style: const TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      isFiltered
-                          ? '${visibleTransactions.length} of ${_transactions.length} shown'
-                          : '${_transactions.length} Transactions Logged',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white.withValues(alpha: 0.9),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Input Box
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E1F30),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _entryController,
-                      decoration: InputDecoration(
-                        hintText: 'Add expense (e.g. 06/20 45.90 dinner @night #food)',
-                        hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
-                        border: InputBorder.none,
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.arrow_forward_rounded),
-                          onPressed: _saveTransaction,
-                          color: const Color(0xFF06B6D4),
-                        ),
-                      ),
-                      onSubmitted: (_) => _saveTransaction(),
-                    ),
-                    const Divider(height: 16, color: Colors.white10),
-                    AnimatedSize(
-                      duration: const Duration(milliseconds: 200),
-                      child: Text(
-                        _livePreviewText,
+                      const SizedBox(height: 12),
+                      Text(
+                        isFiltered
+                            ? '${visibleTransactions.length} of ${_transactions.length} shown'
+                            : '${_transactions.length} Transactions Logged',
                         style: TextStyle(
-                          fontSize: 12,
-                          color: _parsedAmount > 0 ? const Color(0xFF06B6D4) : Colors.grey[400],
-                          fontWeight: _parsedAmount > 0 ? FontWeight.bold : FontWeight.normal,
+                          fontSize: 14,
+                          color: Colors.white.withValues(alpha: 0.9),
                         ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Transaction List Header
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Recent Transactions',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  if (_transactions.any((tx) => tx.syncStatus != SyncStatus.completed))
-                    Text(
-                      'Auto-sync active',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                    )
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              const SizedBox(height: 16),
-
-              if (_availableCategories.isNotEmpty) ...[
-                SizedBox(
-                  height: 36,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      _buildFilterChip(label: 'All', value: null),
-                      ..._availableCategories.map(
-                        (category) => _buildFilterChip(label: category, value: category),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
-
-              // Transaction List
-              Expanded(
-                child: visibleTransactions.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.receipt_long_rounded, size: 64, color: Colors.grey[700]),
-                            const SizedBox(height: 16),
-                            Text(
-                              isFiltered ? 'No transactions in this category.' : 'No transactions yet.',
-                              style: TextStyle(color: Colors.grey[500], fontSize: 16),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: visibleTransactions.length,
-                        physics: const BouncingScrollPhysics(),
-                        itemBuilder: (context, index) {
-                          final tx = visibleTransactions[index];
-                          return _buildTransactionCard(tx);
-                        },
-                      ),
               ),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              SliverToBoxAdapter(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1F30),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _entryController,
+                        decoration: InputDecoration(
+                          hintText: 'Add expense (e.g. 06/20 45.90 dinner @night #food)',
+                          hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
+                          border: InputBorder.none,
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.arrow_forward_rounded),
+                            onPressed: _saveTransaction,
+                            color: const Color(0xFF06B6D4),
+                          ),
+                        ),
+                        onSubmitted: (_) => _saveTransaction(),
+                      ),
+                      const Divider(height: 16, color: Colors.white10),
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 200),
+                        child: Text(
+                          _livePreviewText,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _parsedAmount > 0 ? const Color(0xFF06B6D4) : Colors.grey[400],
+                            fontWeight: _parsedAmount > 0 ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              SliverToBoxAdapter(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Recent Transactions',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (_transactions.any((tx) => tx.syncStatus != SyncStatus.completed))
+                      Text(
+                        'Auto-sync active',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      )
+                  ],
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              if (_availableCategories.isNotEmpty) ...[
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 36,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        _buildFilterChip(label: 'All', value: null),
+                        ..._availableCategories.map(
+                          (category) => _buildFilterChip(label: category, value: category),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              ],
+              if (visibleTransactions.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.receipt_long_rounded, size: 64, color: Colors.grey[700]),
+                        const SizedBox(height: 16),
+                        Text(
+                          isFiltered ? 'No transactions in this category.' : 'No transactions yet.',
+                          style: TextStyle(color: Colors.grey[500], fontSize: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _buildTransactionCard(visibleTransactions[index]),
+                    childCount: visibleTransactions.length,
+                  ),
+                ),
             ],
           ),
         ),

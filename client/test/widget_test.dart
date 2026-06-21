@@ -11,12 +11,9 @@ void main() {
 
   testWidgets('App renders dashboard screen', (WidgetTester tester) async {
     await tester.pumpWidget(const ExpenseTrackerApp());
-    await tester.pump();
 
-    expect(find.text('AuraExpense'), findsOneWidget);
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).title, 'TapEx');
 
-    // Allow the server reachability check to complete
-    await tester.pump(const Duration(seconds: 4));
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });

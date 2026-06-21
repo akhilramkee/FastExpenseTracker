@@ -65,6 +65,50 @@ For local development against a server on the same machine:
 flutter run --dart-define=SERVER_HOST=127.0.0.1
 ```
 
+### Deploy to iPhone (release)
+
+List connected devices, then install a release build on your phone:
+
+```bash
+make ios-devices
+make ios-release DEVICE="Akhilesh's iPhone (wireless)"
+```
+
+Use the exact name from `make ios-devices`. Override the backend host if needed:
+
+```bash
+make ios-release DEVICE="Akhilesh's iPhone (wireless)" SERVER_HOST=akhilesh
+```
+
+### Share Android APK
+
+**Option A — GitHub Actions (no Android Studio required)**
+
+Push a version tag to trigger an automatic APK build. The workflow uploads the APK as a
+GitHub Actions artifact and attaches it to the GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Download the APK from the **Releases** page or the workflow run's **Artifacts** tab.
+You can also run the workflow manually from the **Actions** tab.
+
+To change the backend host for CI builds, edit `SERVER_HOST` in
+`.github/workflows/android-release-apk.yml` (or set a repository variable named
+`SERVER_HOST` and update the workflow to use it).
+
+**Option B — Build locally**
+
+```bash
+make android-apk
+```
+
+The file is written to `dist/TapEx-release.apk` (also under `client/build/app/outputs/flutter-apk/app-release.apk`).
+
+Recipients must allow install from unknown sources. The app expects your Tailscale backend at `akhilesh` by default.
+
 ## Testing
 
 ```bash

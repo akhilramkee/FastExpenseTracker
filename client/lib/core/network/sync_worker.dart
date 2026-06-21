@@ -93,6 +93,29 @@ class SyncWorker {
     }
   }
 
+  Future<bool> restoreFromServer() async {
+    if (!await isServerReachable()) return false;
+
+    try {
+      final response =
+          await http.get(Uri.parse(statusUrl)).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) return false;
+
+      final pendingDeletes = (await _dbHelper.getPendingDeletes()).toSet();
+      final List<dynamic> data = jsonDecode(response.body);
+
+      for (final item in data) {
+        final serverTx = TransactionModel.fromMap(item as Map<String, dynamic>);
+        if (pendingDeletes.contains(serverTx.id)) continue;
+        await _dbHelper.insertTransaction(serverTx);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> pullSyncUpdates() async {
     if (!await isServerReachable()) return;
 
@@ -124,6 +147,7 @@ class SyncWorker {
   }
 
   Future<bool> syncAll() async {
+    await restoreFromServer();
     await syncPendingDeletes();
     final pushed = await performBackgroundSync();
     await pullSyncUpdates();

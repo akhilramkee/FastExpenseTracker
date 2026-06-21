@@ -14,3 +14,6 @@ server/.pytest_cache/
 # Flutter / client (see client/.gitignore for full list)
 client/build/
 client/.dart_tool/
+
+# Release artifacts
+dist/
