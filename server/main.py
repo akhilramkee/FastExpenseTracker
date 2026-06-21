@@ -150,6 +150,9 @@ def apply_client_created_at(db_tx: Transaction, item: TransactionSyncItem) -> No
 def apply_import_created_at(db_tx: Transaction, created_at: Optional[str]) -> None:
     parsed = parse_client_datetime(created_at)
     if parsed:
+        current_year = datetime.datetime.now().year
+        if parsed.year != current_year:
+            parsed = parsed.replace(year=current_year)
         db_tx.created_at = parsed
 
 def transaction_to_response(tx: Transaction) -> EnrichedTransactionResponse:
