@@ -10,6 +10,7 @@ import 'core/db/database_helper.dart';
 import 'core/models/transaction_model.dart';
 import 'core/network/sync_worker.dart';
 import 'core/utils/category_utils.dart';
+import 'core/utils/currency_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -139,7 +140,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final text = _entryController.text.trim();
     if (text.isEmpty) {
       setState(() {
-        _livePreviewText = "Type something like: 06/20 45.90 dinner @night #food (date optional, defaults to today)";
+        _livePreviewText = "Type something like: 06/20 Rs. 45.90 dinner @night #food (date optional, defaults to today)";
         _parsedAmount = 0.0;
       });
       return;
@@ -150,7 +151,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() {
       _parsedAmount = parsed.amount;
       _livePreviewText =
-          "Preview — $dateLabel • Amount: \$${parsed.amount.toStringAsFixed(2)}  •  Tag: #${parsed.tag}";
+          "Preview — $dateLabel • Amount: ${formatCurrency(parsed.amount)}  •  Tag: #${parsed.tag}";
     });
   }
 
@@ -231,7 +232,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         backgroundColor: const Color(0xFF1E1F30),
         title: const Text('Delete expense?'),
         content: Text(
-          'Remove "${tx.description}" (\$${tx.amount.toStringAsFixed(2)})? This will sync the deletion to the server.',
+          'Remove "${tx.description}" (${formatCurrency(tx.amount)})? This will sync the deletion to the server.',
         ),
         actions: [
           TextButton(
@@ -267,7 +268,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final visibleTransactions = _filteredTransactions;
     final totalExpense = _calculateTotalExpenses(visibleTransactions);
-    final formatter = NumberFormat.currency(symbol: '\$');
+    final formatter = currencyFormatter;
     final isFiltered = _selectedCategoryFilter != null;
 
     return Scaffold(
@@ -693,7 +694,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
               Text(
-                '\$${tx.amount.toStringAsFixed(2)}',
+                formatCurrency(tx.amount),
                 style: const TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 16,

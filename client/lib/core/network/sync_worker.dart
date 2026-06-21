@@ -6,7 +6,7 @@ import '../models/transaction_model.dart';
 class SyncWorker {
   static const String serverHost = String.fromEnvironment(
     'SERVER_HOST',
-    defaultValue: '100.118.49.74',
+    defaultValue: 'akhilesh',
   );
   static const String baseUrl = 'http://$serverHost:8080';
   static const String healthUrl = '$baseUrl/health';

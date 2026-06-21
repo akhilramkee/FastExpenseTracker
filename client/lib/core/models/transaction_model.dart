@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import '../utils/currency_utils.dart';
+
 enum SyncStatus { pending, processing, completed, failed }
 
 class _DateExtraction {
@@ -53,6 +55,7 @@ class TransactionModel {
     String description = parseText
         .replaceAll(amountMatch?.group(0) ?? '', '')
         .replaceAll(tagMatch?.group(0) ?? '', '')
+        .replaceAll(currencyMarkerPattern, '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
 

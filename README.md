@@ -52,11 +52,11 @@ ollama pull qwen3:8b
 
 ## Client configuration
 
-The Flutter client connects to your Tailscale node by default. Override the host at build/run time:
+The Flutter client connects to your Tailscale node by default using the device shortname (`akhilesh`). Override the host at build/run time:
 
 ```bash
 cd client
-flutter run --dart-define=SERVER_HOST=100.118.49.74
+flutter run --dart-define=SERVER_HOST=akhilesh
 ```
 
 For local development against a server on the same machine:

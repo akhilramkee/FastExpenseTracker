@@ -90,5 +90,29 @@ void main() {
       expect(edited.createdAt.month, 1);
       expect(edited.createdAt.day, 10);
     });
+
+    test('should parse amount with Rs. prefix', () {
+      const input = "Rs. 1450 zoom subscription @work";
+      final tx = TransactionModel.parse(input);
+
+      expect(tx.amount, 1450.0);
+      expect(tx.description, "zoom subscription");
+    });
+
+    test('should parse amount with rupee suffix', () {
+      const input = "500 rupees groceries #food";
+      final tx = TransactionModel.parse(input);
+
+      expect(tx.amount, 500.0);
+      expect(tx.description, "groceries");
+    });
+
+    test('should parse amount with rs suffix', () {
+      const input = "99.50 rs dinner #food";
+      final tx = TransactionModel.parse(input);
+
+      expect(tx.amount, 99.50);
+      expect(tx.description, "dinner");
+    });
   });
 }
