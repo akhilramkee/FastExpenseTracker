@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
@@ -11,8 +12,10 @@ import 'package:intl/intl.dart';
 import 'core/db/database_helper.dart';
 import 'core/models/transaction_model.dart';
 import 'core/network/sync_worker.dart';
+import 'core/services/expense_entry_service.dart';
 import 'core/utils/category_utils.dart';
 import 'core/utils/currency_utils.dart';
+import 'widgets/quick_add_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,7 +65,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _entryController = TextEditingController();
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final SyncWorker _syncWorker = SyncWorker();
-  
+  final ExpenseEntryService _expenseEntryService = ExpenseEntryService();
+  final AppLinks _appLinks = AppLinks();
+
   List<TransactionModel> _transactions = [];
   bool _isSyncing = false;
   bool _isImporting = false;
@@ -71,6 +76,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _livePreviewText = "Type something like: 1450 zoom subscription renewal @work";
   Timer? _statusPollTimer;
   Timer? _serverStatusTimer;
+  StreamSubscription<Uri>? _linkSubscription;
+  bool _quickAddPending = false;
+  String _pendingQuickAddInitialText = '';
+  bool _isQuickAddSheetOpen = false;
 
   // Live preview parser state
   double _parsedAmount = 0.0;
@@ -112,12 +121,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     _entryController.addListener(_updateLivePreview);
+    _initDeepLinks();
+  }
+
+  Future<void> _initDeepLinks() async {
+    final initialLink = await _appLinks.getInitialLink();
+    if (initialLink != null) {
+      _queueQuickAddFromUri(initialLink);
+    }
+
+    _linkSubscription = _appLinks.uriLinkStream.listen(_queueQuickAddFromUri);
+  }
+
+  void _queueQuickAddFromUri(Uri uri) {
+    if (uri.host != 'add') return;
+
+    setState(() {
+      _quickAddPending = true;
+      _pendingQuickAddInitialText = uri.queryParameters['text'] ?? '';
+    });
+    _maybeShowQuickAddSheet();
+  }
+
+  Future<void> _maybeShowQuickAddSheet() async {
+    if (!_quickAddPending || _isLoading || !mounted || _isQuickAddSheetOpen) return;
+
+    _quickAddPending = false;
+    final initialText = _pendingQuickAddInitialText;
+    _pendingQuickAddInitialText = '';
+
+    _isQuickAddSheetOpen = true;
+    final saved = await showQuickAddSheet(
+      context,
+      initialText: initialText,
+      expenseEntryService: _expenseEntryService,
+    );
+    _isQuickAddSheetOpen = false;
+
+    if (!mounted || saved == null) return;
+
+    await _loadTransactions();
+    if (!mounted) return;
+
+    _triggerSync();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Saved: ${formatCurrency(saved.amount)} ${saved.description} #${saved.tag}',
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
     _statusPollTimer?.cancel();
     _serverStatusTimer?.cancel();
+    _linkSubscription?.cancel();
     _entryController.dispose();
     super.dispose();
   }
@@ -140,6 +200,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           _isLoading = false;
         });
+        _maybeShowQuickAddSheet();
       }
     }
   }
@@ -176,12 +237,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final text = _entryController.text.trim();
     if (text.isEmpty) return;
 
-    final parsedTx = TransactionModel.parse(text);
-    await _dbHelper.insertTransaction(parsedTx);
+    await _expenseEntryService.addFromText(text);
     _entryController.clear();
-    
+
     await _loadTransactions();
-    
+
     // Proactively trigger background sync
     _triggerSync();
   }
