@@ -28,11 +28,11 @@ class SyncWorker {
     }
   }
 
-  Future<bool> syncPendingDeletes() async {
+  Future<bool> syncPendingDeletes({bool skipReachabilityCheck = false}) async {
     final pendingDeletes = await _dbHelper.getPendingDeletes();
     if (pendingDeletes.isEmpty) return true;
 
-    if (!await isServerReachable()) return false;
+    if (!skipReachabilityCheck && !await isServerReachable()) return false;
 
     try {
       final response = await http
@@ -55,8 +55,8 @@ class SyncWorker {
     }
   }
 
-  Future<bool> performBackgroundSync() async {
-    if (!await isServerReachable()) return false;
+  Future<bool> performBackgroundSync({bool skipReachabilityCheck = false}) async {
+    if (!skipReachabilityCheck && !await isServerReachable()) return false;
 
     await syncPendingDeletes();
 
@@ -94,8 +94,8 @@ class SyncWorker {
     }
   }
 
-  Future<bool> restoreFromServer() async {
-    if (!await isServerReachable()) return false;
+  Future<bool> restoreFromServer({bool skipReachabilityCheck = false}) async {
+    if (!skipReachabilityCheck && !await isServerReachable()) return false;
 
     try {
       final response =
@@ -125,8 +125,8 @@ class SyncWorker {
     }
   }
 
-  Future<void> pullSyncUpdates() async {
-    if (!await isServerReachable()) return;
+  Future<void> pullSyncUpdates({bool skipReachabilityCheck = false}) async {
+    if (!skipReachabilityCheck && !await isServerReachable()) return;
 
     try {
       final transactions = await _dbHelper.getTransactions();
@@ -156,10 +156,12 @@ class SyncWorker {
   }
 
   Future<bool> syncAll() async {
-    await syncPendingDeletes();
-    final pushed = await performBackgroundSync();
-    await pullSyncUpdates();
-    await restoreFromServer();
+    if (!await isServerReachable()) return false;
+
+    await syncPendingDeletes(skipReachabilityCheck: true);
+    final pushed = await performBackgroundSync(skipReachabilityCheck: true);
+    await pullSyncUpdates(skipReachabilityCheck: true);
+    await restoreFromServer(skipReachabilityCheck: true);
     return pushed;
   }
 

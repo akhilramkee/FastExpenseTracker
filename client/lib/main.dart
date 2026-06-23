@@ -102,8 +102,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _initializeData();
-    _checkServerStatus();
-    
+
     // Check server status periodically
     _serverStatusTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (mounted) _checkServerStatus();
@@ -193,7 +192,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _initializeData() async {
     try {
-      await _syncWorker.syncAll();
       await _loadTransactions();
     } finally {
       if (mounted) {
@@ -203,6 +201,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _maybeShowQuickAddSheet();
       }
     }
+    unawaited(_triggerSync());
+    unawaited(_checkServerStatus());
   }
 
   Future<void> _loadTransactions() async {
