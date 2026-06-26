@@ -86,6 +86,21 @@ class DatabaseHelper {
     });
   }
 
+  Future<List<TransactionModel>> getTransactionsByMonthAndYear(int month, int year) async {
+    final db = await database;
+    final monthString = month.toString().padLeft(2, '0');
+    final yearString = year.toString();
+
+    final List<Map<String, dynamic>> maps = await db.query(
+      'transactions',
+      where: "strftime('%m', created_at) = ? AND strftime('%Y', created_at) = ?",
+      whereArgs: [monthString, yearString],
+      orderBy: 'created_at DESC',
+    );
+
+    return List.generate(maps.length, (i) => TransactionModel.fromMap(maps[i]));
+  }
+
   Future<List<TransactionModel>> getPendingTransactions() async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
