@@ -15,6 +15,7 @@ import 'core/network/sync_worker.dart';
 import 'core/services/expense_entry_service.dart';
 import 'core/utils/category_utils.dart';
 import 'core/utils/currency_utils.dart';
+import 'widgets/month_year_picker.dart';
 import 'widgets/quick_add_sheet.dart';
 
 void main() async {
@@ -68,6 +69,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final ExpenseEntryService _expenseEntryService = ExpenseEntryService();
   final AppLinks _appLinks = AppLinks();
 
+  int _selectedMonth = DateTime.now().month;
+  int _selectedYear = DateTime.now().year;
   List<TransactionModel> _transactions = [];
   bool _isSyncing = false;
   bool _isImporting = false;
@@ -206,13 +209,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadTransactions() async {
-    final list = await _dbHelper.getTransactions();
+    final list = await _dbHelper.getTransactionsByMonthAndYear(
+      _selectedMonth,
+      _selectedYear,
+    );
     if (mounted) {
       setState(() {
         _transactions = list;
       });
     }
   }
+
+  Future<void> _onPeriodChanged(DateTime period) async {
+    setState(() {
+      _selectedMonth = period.month;
+      _selectedYear = period.year;
+      _selectedCategoryFilter = null;
+    });
+    await _loadTransactions();
+  }
+
+  String get _selectedPeriodLabel =>
+      DateFormat('MMMM yyyy').format(DateTime(_selectedYear, _selectedMonth));
 
   void _updateLivePreview() {
     final text = _entryController.text.trim();
@@ -506,6 +524,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 24)),
               SliverToBoxAdapter(
+                child: MonthYearPickerField(
+                  month: _selectedMonth,
+                  year: _selectedYear,
+                  onChanged: _onPeriodChanged,
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              SliverToBoxAdapter(
                 child: Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
@@ -547,8 +573,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const SizedBox(height: 12),
                       Text(
                         isFiltered
-                            ? '${visibleTransactions.length} of ${_transactions.length} shown'
-                            : '${_transactions.length} Transactions Logged',
+                            ? '${visibleTransactions.length} of ${_transactions.length} in $_selectedPeriodLabel'
+                            : '${_transactions.length} in $_selectedPeriodLabel',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.white.withValues(alpha: 0.9),
@@ -666,7 +692,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Icon(Icons.receipt_long_rounded, size: 64, color: Colors.grey[700]),
                         const SizedBox(height: 16),
                         Text(
-                          isFiltered ? 'No transactions in this category.' : 'No transactions yet.',
+                          isFiltered
+                              ? 'No transactions in this category for $_selectedPeriodLabel.'
+                              : 'No transactions for $_selectedPeriodLabel.',
                           style: TextStyle(color: Colors.grey[500], fontSize: 16),
                         ),
                       ],
