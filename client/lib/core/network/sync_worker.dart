@@ -1,23 +1,23 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/server_config_service.dart';
 import '../db/database_helper.dart';
 import '../models/transaction_model.dart';
 
 class SyncWorker {
-  static const String serverHost = String.fromEnvironment(
-    'SERVER_HOST',
-    defaultValue: 'akhilesh',
-  );
-  static const String baseUrl = 'http://$serverHost:8080';
-  static const String healthUrl = '$baseUrl/health';
-  static const String syncUrl = '$baseUrl/api/v1/sync';
-  static const String deletesUrl = '$baseUrl/api/v1/sync/deletes';
-  static const String statusUrl = '$baseUrl/api/v1/sync/status';
-  static const String importUrl = '$baseUrl/api/v1/import';
+  final DatabaseHelper _dbHelper;
+  final ServerConfigService _config;
 
-  final DatabaseHelper _dbHelper = DatabaseHelper();
+  SyncWorker({
+    DatabaseHelper? dbHelper,
+    ServerConfigService? config,
+  })  : _dbHelper = dbHelper ?? DatabaseHelper(),
+        _config = config ?? ServerConfigService();
 
   Future<bool> isServerReachable() async {
+    final healthUrl = _config.healthUrl;
+    if (healthUrl.isEmpty) return false;
+
     try {
       final response = await http
           .get(Uri.parse(healthUrl))
@@ -37,7 +37,7 @@ class SyncWorker {
     try {
       final response = await http
           .post(
-            Uri.parse(deletesUrl),
+            Uri.parse(_config.deletesUrl),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'ids': pendingDeletes}),
           )
@@ -73,7 +73,7 @@ class SyncWorker {
       };
 
       final response = await http.post(
-        Uri.parse(syncUrl),
+        Uri.parse(_config.syncUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       ).timeout(const Duration(seconds: 10));
@@ -98,8 +98,9 @@ class SyncWorker {
     if (!skipReachabilityCheck && !await isServerReachable()) return false;
 
     try {
-      final response =
-          await http.get(Uri.parse(statusUrl)).timeout(const Duration(seconds: 15));
+      final response = await http
+          .get(Uri.parse(_config.statusUrl))
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) return false;
 
@@ -139,7 +140,7 @@ class SyncWorker {
       if (unfinished.isEmpty) return;
 
       final idsParam = unfinished.map((tx) => tx.id).join(',');
-      final url = Uri.parse('$statusUrl?ids=$idsParam');
+      final url = Uri.parse('${_config.statusUrl}?ids=$idsParam');
 
       final response = await http.get(url).timeout(const Duration(seconds: 10));
 
@@ -173,7 +174,7 @@ class SyncWorker {
 
       final response = await http
           .put(
-            Uri.parse('$baseUrl/api/v1/transactions/${tx.id}'),
+            Uri.parse(_config.transactionUrl(tx.id)),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(tx.toMap()),
           )
@@ -208,7 +209,7 @@ class SyncWorker {
 
     final response = await http
         .post(
-          Uri.parse(importUrl),
+          Uri.parse(_config.importUrl),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'content': content, 'format': format}),
         )

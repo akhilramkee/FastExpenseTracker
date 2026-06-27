@@ -9,9 +9,6 @@ on:
 permissions:
   contents: write
 
-env:
-  SERVER_HOST: akhilesh
-
 jobs:
   build-apk:
     name: Build TapEx APK
@@ -43,7 +40,7 @@ jobs:
         run: yes | flutter doctor --android-licenses
 
       - name: Build release APK
-        run: flutter build apk --release --dart-define=SERVER_HOST=${{ env.SERVER_HOST }}
+        run: flutter build apk --release
 
       - name: Prepare release filename
         id: apk

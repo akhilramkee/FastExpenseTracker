@@ -52,17 +52,20 @@ ollama pull qwen3:8b
 
 ## Client configuration
 
-The Flutter client connects to your Tailscale node by default using the device shortname (`akhilesh`). Override the host at build/run time:
+Configure the sync server **inside the app** (gear icon on the dashboard):
+
+1. Enter your server’s Tailscale **hostname** manually (e.g. `akhilesh`), or
+2. Paste a [Tailscale API key](https://login.tailscale.com/admin/settings/keys) and tap **Refresh tailnet devices** to pick from your tailnet.
+
+The API key is stored securely on-device and is only used to list tailnet machines.
+
+For local development against a server on the same machine, set hostname to `127.0.0.1`.
+
+**Optional build-time seed:** pass `--dart-define=SERVER_HOST=hostname` to pre-fill the host on first launch only (useful for CI or dev builds):
 
 ```bash
 cd client
 flutter run --dart-define=SERVER_HOST=akhilesh
-```
-
-For local development against a server on the same machine:
-
-```bash
-flutter run --dart-define=SERVER_HOST=127.0.0.1
 ```
 
 ### Deploy to iPhone (release)
@@ -74,7 +77,7 @@ make ios-devices
 make ios-release DEVICE="Akhilesh's iPhone (wireless)"
 ```
 
-Use the exact name from `make ios-devices`. Override the backend host if needed:
+Use the exact name from `make ios-devices`. Optionally seed the default host on first launch:
 
 ```bash
 make ios-release DEVICE="Akhilesh's iPhone (wireless)" SERVER_HOST=akhilesh
@@ -95,10 +98,6 @@ git push origin v1.0.0
 Download the APK from the **Releases** page or the workflow run's **Artifacts** tab.
 You can also run the workflow manually from the **Actions** tab.
 
-To change the backend host for CI builds, edit `SERVER_HOST` in
-`.github/workflows/android-release-apk.yml` (or set a repository variable named
-`SERVER_HOST` and update the workflow to use it).
-
 **Option B — Build locally**
 
 ```bash
@@ -107,7 +106,7 @@ make android-apk
 
 The file is written to `dist/TapEx-release.apk` (also under `client/build/app/outputs/flutter-apk/app-release.apk`).
 
-Recipients must allow install from unknown sources. The app expects your Tailscale backend at `akhilesh` by default.
+Recipients must allow install from unknown sources. Configure the sync server in the app after install (Settings → tailnet devices or manual hostname).
 
 ## Testing
 

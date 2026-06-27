@@ -15,9 +15,9 @@ ios-devices:
 	cd client && flutter devices
 
 # Usage: make ios-release DEVICE="Akhilesh's iPhone (wireless)"
-# Optional: SERVER_HOST=akhilesh (default)
+# Optional: SERVER_HOST=hostname seeds the in-app default on first launch only
 DEVICE ?=
-SERVER_HOST ?= akhilesh
+SERVER_HOST ?=
 
 ios-release:
 	@if [ -z "$(DEVICE)" ]; then \
@@ -25,10 +25,18 @@ ios-release:
 		echo 'Run make ios-devices to list connected phones.'; \
 		exit 1; \
 	fi
-	cd client && flutter run --release -d "$(DEVICE)" --dart-define=SERVER_HOST=$(SERVER_HOST)
+	@if [ -n "$(SERVER_HOST)" ]; then \
+		cd client && flutter run --release -d "$(DEVICE)" --dart-define=SERVER_HOST=$(SERVER_HOST); \
+	else \
+		cd client && flutter run --release -d "$(DEVICE)"; \
+	fi
 
 android-apk:
-	cd client && flutter build apk --release --dart-define=SERVER_HOST=$(SERVER_HOST)
+	@if [ -n "$(SERVER_HOST)" ]; then \
+		cd client && flutter build apk --release --dart-define=SERVER_HOST=$(SERVER_HOST); \
+	else \
+		cd client && flutter build apk --release; \
+	fi
 	mkdir -p dist
 	cp client/build/app/outputs/flutter-apk/app-release.apk dist/TapEx-release.apk
 	@echo ""

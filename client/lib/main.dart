@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:intl/intl.dart';
+import 'core/config/server_config_service.dart';
 import 'core/db/database_helper.dart';
 import 'core/models/transaction_model.dart';
 import 'core/network/sync_worker.dart';
@@ -17,6 +18,7 @@ import 'core/utils/category_utils.dart';
 import 'core/utils/currency_utils.dart';
 import 'widgets/month_year_picker.dart';
 import 'widgets/quick_add_sheet.dart';
+import 'widgets/server_settings_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +29,8 @@ void main() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
+
+  await ServerConfigService().initialize();
 
   runApp(const ExpenseTrackerApp());
 }
@@ -65,7 +69,8 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _entryController = TextEditingController();
   final DatabaseHelper _dbHelper = DatabaseHelper();
-  final SyncWorker _syncWorker = SyncWorker();
+  final ServerConfigService _serverConfig = ServerConfigService();
+  late final SyncWorker _syncWorker = SyncWorker(config: _serverConfig);
   final ExpenseEntryService _expenseEntryService = ExpenseEntryService();
   final AppLinks _appLinks = AppLinks();
 
@@ -185,11 +190,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _checkServerStatus() async {
+    if (!_serverConfig.isConfigured) {
+      if (mounted) {
+        setState(() {
+          _serverOnline = false;
+        });
+      }
+      return;
+    }
     final online = await _syncWorker.isServerReachable();
     if (mounted) {
       setState(() {
         _serverOnline = online;
       });
+    }
+  }
+
+  String get _serverStatusLabel {
+    if (!_serverConfig.isConfigured) return 'Server not configured';
+    final host = _serverConfig.getServerHost();
+    if (_serverOnline) return 'Online · $host';
+    return 'Offline · $host';
+  }
+
+  Future<void> _openServerSettings() async {
+    final saved = await ServerSettingsSheet.show(
+      context,
+      config: _serverConfig,
+      syncWorker: _syncWorker,
+      onSaved: _checkServerStatus,
+    );
+    if (!mounted) return;
+    if (saved == true) {
+      await _checkServerStatus();
+      if (!mounted) return;
+      unawaited(_triggerSync());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sync server set to ${_serverConfig.getServerHost()}'),
+        ),
+      );
+    } else {
+      await _checkServerStatus();
     }
   }
 
@@ -206,6 +248,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     unawaited(_triggerSync());
     unawaited(_checkServerStatus());
+    if (!_serverConfig.isConfigured && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Configure your sync server in Settings'),
+            action: SnackBarAction(
+              label: 'Settings',
+              onPressed: _openServerSettings,
+            ),
+          ),
+        );
+      });
+    }
   }
 
   Future<void> _loadTransactions() async {
@@ -283,10 +339,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _importFromFile() async {
-    if (!_serverOnline) {
+    if (!_serverConfig.isConfigured || !_serverOnline) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Server offline — import requires a connection')),
+        SnackBar(
+          content: Text(
+            !_serverConfig.isConfigured
+                ? 'Configure sync server in Settings before importing'
+                : 'Server offline — import requires a connection',
+          ),
+        ),
       );
       return;
     }
@@ -492,19 +554,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              _serverOnline ? 'Tailscale Online' : 'Offline Mode',
+                              _serverStatusLabel,
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.grey[400],
+                                color: !_serverConfig.isConfigured
+                                    ? Colors.orangeAccent
+                                    : Colors.grey[400],
                               ),
                             ),
                           ],
                         )
                       ],
                     ),
-                    IconButton.filledTonal(
-                      onPressed: _triggerSync,
-                      icon: _isSyncing
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton.filledTonal(
+                          onPressed: _openServerSettings,
+                          icon: const Icon(Icons.settings_outlined),
+                          tooltip: 'Sync server settings',
+                          style: IconButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E1F30),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton.filledTonal(
+                          onPressed: _serverConfig.isConfigured ? _triggerSync : _openServerSettings,
+                          icon: _isSyncing
                           ? const SizedBox(
                               width: 18,
                               height: 18,
@@ -514,10 +591,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                             )
                           : const Icon(Icons.sync),
-                      style: IconButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E1F30),
-                        foregroundColor: Colors.white,
-                      ),
+                          style: IconButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E1F30),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
                     )
                   ],
                 ),
