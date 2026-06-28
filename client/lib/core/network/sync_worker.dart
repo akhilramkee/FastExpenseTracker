@@ -1,18 +1,31 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/enrichment_config_service.dart';
 import '../config/server_config_service.dart';
 import '../db/database_helper.dart';
 import '../models/transaction_model.dart';
+import '../services/expense_entry_service.dart';
 
 class SyncWorker {
   final DatabaseHelper _dbHelper;
   final ServerConfigService _config;
+  final ExpenseEntryService _expenseEntryService;
+  final EnrichmentConfigService _enrichmentConfig;
 
   SyncWorker({
     DatabaseHelper? dbHelper,
     ServerConfigService? config,
+    ExpenseEntryService? expenseEntryService,
+    EnrichmentConfigService? enrichmentConfig,
   })  : _dbHelper = dbHelper ?? DatabaseHelper(),
-        _config = config ?? ServerConfigService();
+        _config = config ?? ServerConfigService(),
+        _enrichmentConfig = enrichmentConfig ?? EnrichmentConfigService(),
+        _expenseEntryService = expenseEntryService ??
+            ExpenseEntryService(
+              dbHelper: dbHelper ?? DatabaseHelper(),
+              enrichmentConfig: enrichmentConfig ?? EnrichmentConfigService(),
+              serverConfig: config ?? ServerConfigService(),
+            );
 
   Future<bool> isServerReachable() async {
     final healthUrl = _config.healthUrl;
@@ -26,6 +39,12 @@ class SyncWorker {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<bool> syncEnrichmentConfig({bool skipReachabilityCheck = false}) async {
+    if (_config.enrichmentConfigUrl.isEmpty) return false;
+    if (!skipReachabilityCheck && !await isServerReachable()) return false;
+    return _enrichmentConfig.syncFromServer(_config);
   }
 
   Future<bool> syncPendingDeletes({bool skipReachabilityCheck = false}) async {
@@ -55,12 +74,25 @@ class SyncWorker {
     }
   }
 
+  Future<void> _enrichPendingTransactions(List<TransactionModel> pending) async {
+    for (final tx in pending) {
+      final enriched = await _expenseEntryService.enrichIfPossible(tx);
+      if (enriched != tx) {
+        await _dbHelper.updateTransaction(enriched);
+      }
+    }
+  }
+
   Future<bool> performBackgroundSync({bool skipReachabilityCheck = false}) async {
     if (!skipReachabilityCheck && !await isServerReachable()) return false;
 
     await syncPendingDeletes();
 
-    final pending = await _dbHelper.getPendingTransactions();
+    var pending = await _dbHelper.getPendingTransactions();
+    if (pending.isEmpty) return true;
+
+    await _enrichPendingTransactions(pending);
+    pending = await _dbHelper.getPendingTransactions();
     if (pending.isEmpty) return true;
 
     try {
@@ -159,6 +191,7 @@ class SyncWorker {
   Future<bool> syncAll() async {
     if (!await isServerReachable()) return false;
 
+    await syncEnrichmentConfig(skipReachabilityCheck: true);
     await syncPendingDeletes(skipReachabilityCheck: true);
     final pushed = await performBackgroundSync(skipReachabilityCheck: true);
     await pullSyncUpdates(skipReachabilityCheck: true);
@@ -170,6 +203,12 @@ class SyncWorker {
     if (!await isServerReachable()) return false;
 
     try {
+      final enriched = await _expenseEntryService.enrichIfPossible(tx);
+      if (enriched != tx) {
+        await _dbHelper.updateTransaction(enriched);
+        tx = enriched;
+      }
+
       await _dbHelper.updateSyncStatus(tx.id, SyncStatus.processing);
 
       final response = await http

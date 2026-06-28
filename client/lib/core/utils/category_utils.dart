@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'categories.dart';
+
 class CategoryStyle {
   final IconData icon;
   final Color color;
@@ -13,25 +15,23 @@ const _defaultStyle = CategoryStyle(
 );
 
 const _categoryStyles = <String, CategoryStyle>{
-  'food': CategoryStyle(icon: Icons.restaurant_rounded, color: Color(0xFFF97316)),
   'groceries': CategoryStyle(icon: Icons.shopping_basket_rounded, color: Color(0xFF22C55E)),
-  'coffee': CategoryStyle(icon: Icons.coffee_rounded, color: Color(0xFF92400E)),
-  'dining': CategoryStyle(icon: Icons.restaurant_menu_rounded, color: Color(0xFFEA580C)),
-  'transport': CategoryStyle(icon: Icons.directions_car_rounded, color: Color(0xFF3B82F6)),
+  'food': CategoryStyle(icon: Icons.restaurant_rounded, color: Color(0xFFF97316)),
   'travel': CategoryStyle(icon: Icons.flight_rounded, color: Color(0xFF06B6D4)),
-  'subscription': CategoryStyle(icon: Icons.subscriptions_rounded, color: Color(0xFF8B5CF6)),
+  'transport': CategoryStyle(icon: Icons.directions_car_rounded, color: Color(0xFF3B82F6)),
+  'healthcare': CategoryStyle(icon: Icons.medical_services_rounded, color: Color(0xFFEF4444)),
   'subscriptions': CategoryStyle(icon: Icons.subscriptions_rounded, color: Color(0xFF8B5CF6)),
-  'work': CategoryStyle(icon: Icons.work_rounded, color: Color(0xFF6366F1)),
-  'entertainment': CategoryStyle(icon: Icons.movie_rounded, color: Color(0xFFEC4899)),
-  'shopping': CategoryStyle(icon: Icons.shopping_bag_rounded, color: Color(0xFF14B8A6)),
-  'health': CategoryStyle(icon: Icons.favorite_rounded, color: Color(0xFFEF4444)),
-  'fitness': CategoryStyle(icon: Icons.fitness_center_rounded, color: Color(0xFF10B981)),
+  'gifts': CategoryStyle(icon: Icons.card_giftcard_rounded, color: Color(0xFFEC4899)),
+  'charity': CategoryStyle(icon: Icons.volunteer_activism_rounded, color: Color(0xFFF59E0B)),
+  'communication': CategoryStyle(icon: Icons.phone_android_rounded, color: Color(0xFF0EA5E9)),
   'utilities': CategoryStyle(icon: Icons.bolt_rounded, color: Color(0xFFEAB308)),
-  'rent': CategoryStyle(icon: Icons.home_rounded, color: Color(0xFF78716C)),
-  'housing': CategoryStyle(icon: Icons.home_rounded, color: Color(0xFF78716C)),
+  'entertainment': CategoryStyle(icon: Icons.movie_rounded, color: Color(0xFFA855F7)),
+  'shopping': CategoryStyle(icon: Icons.shopping_bag_rounded, color: Color(0xFF14B8A6)),
+  'work': CategoryStyle(icon: Icons.work_rounded, color: Color(0xFF6366F1)),
   'education': CategoryStyle(icon: Icons.school_rounded, color: Color(0xFF2563EB)),
-  'night': CategoryStyle(icon: Icons.nightlife_rounded, color: Color(0xFFA855F7)),
+  'housing': CategoryStyle(icon: Icons.home_rounded, color: Color(0xFF78716C)),
   'personal': CategoryStyle(icon: Icons.person_rounded, color: Color(0xFF64748B)),
+  'fitness': CategoryStyle(icon: Icons.fitness_center_rounded, color: Color(0xFF10B981)),
   'uncategorized': CategoryStyle(icon: Icons.label_outline_rounded, color: Color(0xFF64748B)),
 };
 
@@ -40,17 +40,25 @@ const _merchantStyles = <String, CategoryStyle>{
   'netflix': CategoryStyle(icon: Icons.live_tv_rounded, color: Color(0xFFE50914)),
   'spotify': CategoryStyle(icon: Icons.music_note_rounded, color: Color(0xFF1DB954)),
   'amazon': CategoryStyle(icon: Icons.local_shipping_rounded, color: Color(0xFFFF9900)),
-  'uber': CategoryStyle(icon: Icons.local_taxi_rounded, color: Color(0xFF000000)),
+  'uber': CategoryStyle(icon: Icons.local_taxi_rounded, color: Color(0xFF111827)),
   'lyft': CategoryStyle(icon: Icons.local_taxi_rounded, color: Color(0xFFDD00FF)),
-  'apple': CategoryStyle(icon: Icons.phone_iphone_rounded, color: Color(0xFFA2AAAD)),
+  'rapido': CategoryStyle(icon: Icons.two_wheeler_rounded, color: Color(0xFFFFC107)),
+  'redbus': CategoryStyle(icon: Icons.directions_bus_rounded, color: Color(0xFFD32F2F)),
+  'irctc': CategoryStyle(icon: Icons.train_rounded, color: Color(0xFF1565C0)),
+  'airbnb': CategoryStyle(icon: Icons.house_rounded, color: Color(0xFFFF5A5F)),
+  'airtel': CategoryStyle(icon: Icons.sim_card_rounded, color: Color(0xFFE40000)),
+  'jio': CategoryStyle(icon: Icons.sim_card_rounded, color: Color(0xFF0A2885)),
+  'cursor': CategoryStyle(icon: Icons.code_rounded, color: Color(0xFF8B5CF6)),
   'google': CategoryStyle(icon: Icons.cloud_rounded, color: Color(0xFF4285F4)),
+  'apple': CategoryStyle(icon: Icons.phone_iphone_rounded, color: Color(0xFFA2AAAD)),
+  'zee5': CategoryStyle(icon: Icons.live_tv_rounded, color: Color(0xFF6C2BD9)),
 };
 
 CategoryStyle resolveCategoryStyle({
   required String tag,
   String? merchant,
 }) {
-  final normalizedTag = tag.toLowerCase().trim();
+  final normalizedTag = normalizeCategory(tag);
   if (_categoryStyles.containsKey(normalizedTag)) {
     return _categoryStyles[normalizedTag]!;
   }
@@ -67,12 +75,6 @@ CategoryStyle resolveCategoryStyle({
     }
   }
 
-  for (final entry in _categoryStyles.entries) {
-    if (normalizedTag.contains(entry.key)) {
-      return entry.value;
-    }
-  }
-
   return _defaultStyle;
 }
 
@@ -83,5 +85,5 @@ String displayCategoryLabel({
   if (merchant != null && merchant.isNotEmpty && merchant.toLowerCase() != tag.toLowerCase()) {
     return merchant;
   }
-  return tag;
+  return formatCategoryLabel(tag);
 }

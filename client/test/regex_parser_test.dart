@@ -99,6 +99,19 @@ void main() {
       expect(tx.description, "Zee5 subscription annual");
     });
 
+    test('displayTitle strips tokenizer pad artifacts from displayLabel', () {
+      final tx = TransactionModel(
+        id: 'test-id',
+        rawInput: '1450 zoom subscription',
+        amount: 1450,
+        description: 'zoom subscription',
+        tag: 'work',
+        displayLabel: 'Zoom <pad> Subscription',
+      );
+
+      expect(tx.displayTitle, 'Zoom Subscription');
+    });
+
     test('reparse should clear enrichment fields and mark pending', () {
       final original = TransactionModel(
         id: 'test-id',

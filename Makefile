@@ -1,4 +1,4 @@
-.PHONY: setup server client test test-client test-server health ios-devices ios-release android-apk
+.PHONY: setup server client test test-client test-server test-server-unit health ios-devices ios-release android-apk
 
 setup:
 	cd server && python3 -m venv venv
@@ -50,6 +50,9 @@ test-client:
 
 test-server:
 	cd server && ./venv/bin/python test_server.py
+
+test-server-unit:
+	cd server && ./venv/bin/python -m unittest test_llm_client.py test_categories.py test_enrichment_config.py
 
 health:
 	@curl -s http://127.0.0.1:8080/health | python3 -m json.tool || echo "Server not running. Start with: make server"

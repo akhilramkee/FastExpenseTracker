@@ -1,6 +1,7 @@
 import 'package:uuid/uuid.dart';
 
 import '../utils/currency_utils.dart';
+import '../utils/categories.dart';
 
 enum SyncStatus { pending, processing, completed, failed }
 
@@ -41,8 +42,30 @@ class TransactionModel {
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
-  String get displayTitle =>
-      displayLabel != null && displayLabel!.isNotEmpty ? displayLabel! : description;
+  String get displayTitle {
+    final label = displayLabel;
+    if (label != null && label.isNotEmpty) {
+      return sanitizeDisplayText(label);
+    }
+    return description;
+  }
+
+  static final RegExp _pipeSpecialTokenPattern = RegExp(r'<\|[^|>]+\|>', caseSensitive: false);
+  static final RegExp _angleSpecialTokenPattern = RegExp(
+    r'</?(?:pad|s|unk|bos|eos|im_start|im_end)\b[^>]*>',
+    caseSensitive: false,
+  );
+
+  static String sanitizeDisplayText(String value) {
+    var text = stripTokenizerArtifacts(value);
+    return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  static String stripTokenizerArtifacts(String value) {
+    var text = value.replaceAll(_pipeSpecialTokenPattern, '');
+    text = text.replaceAll(_angleSpecialTokenPattern, '');
+    return text;
+  }
 
   static TransactionModel parse(String input, {DateTime? defaultDate}) {
     final cleanInput = input.trim();
@@ -56,7 +79,7 @@ class TransactionModel {
 
     final tagRegex = RegExp(r'[#@](\w+)');
     final tagMatch = tagRegex.firstMatch(parseText);
-    final tag = tagMatch != null ? tagMatch.group(1)!.toLowerCase() : 'uncategorized';
+    final tag = tagMatch != null ? normalizeCategory(tagMatch.group(1)) : 'uncategorized';
 
     String description = parseText;
     if (amountMatch != null) {
@@ -192,7 +215,7 @@ class TransactionModel {
       rawInput: map['raw_input'] as String,
       amount: (map['amount'] as num).toDouble(),
       description: map['description'] as String,
-      tag: map['tag'] as String,
+      tag: normalizeCategory(map['tag'] as String?),
       merchant: map['merchant'] as String?,
       displayLabel: map['display_label'] as String?,
       aiConfidence: map['ai_confidence'] != null ? (map['ai_confidence'] as num).toDouble() : null,

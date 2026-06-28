@@ -1,9 +1,8 @@
-import os
-import json
 import logging
 import asyncio
 import datetime
 import uuid
+from pathlib import Path
 from typing import List, Literal, Optional
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,17 +10,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import httpx
 
-from database import init_db, get_db, Transaction, SessionLocal
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from database import init_db, get_db, Transaction, SessionLocal, normalize_all_tags
+from categories import category_prompt_block, normalize_category
+from llm_client import (
+    ENRICHMENT_HARD_TIMEOUT,
+    ENRICHMENT_SOFT_TIMEOUT,
+    call_llm,
+    enrichment_health,
+    openrouter_client_config,
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("expense_tracker_server")
-
-# Load configuration
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-OLLAMA_SOFT_TIMEOUT = float(os.getenv("OLLAMA_SOFT_TIMEOUT", "60"))
-OLLAMA_HARD_TIMEOUT = float(os.getenv("OLLAMA_HARD_TIMEOUT", "300"))
 
 app = FastAPI(title="Asynchronous Expense Tracker API Gateway")
 
@@ -36,6 +41,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    normalize_all_tags()
     logger.info("Database initialized successfully.")
     asyncio.create_task(recover_stuck_enrichments())
 
@@ -46,7 +52,10 @@ class TransactionSyncItem(BaseModel):
     amount: float
     description: Optional[str] = None
     tag: Optional[str] = None
+    merchant: Optional[str] = None
     display_label: Optional[str] = Field(None, alias="display_label")
+    ai_confidence: Optional[float] = Field(None, alias="ai_confidence")
+    is_recurring: bool = Field(False, alias="is_recurring")
     sync_status: str = "pending"
     created_at: Optional[str] = None
 
@@ -92,45 +101,57 @@ class DeleteSyncResponse(BaseModel):
     status: str
     deleted: int
 
-# System prompt for Ollama
-OLLAMA_SYSTEM_PROMPT = """You are an isolated financial intelligence string extraction parser microservice engine.
+class EnrichmentConfigResponse(BaseModel):
+    configured: bool
+    openrouter_api_key: Optional[str] = None
+    openrouter_model: str = "openrouter/free"
+
+# System prompts for LLM enrichment
+_CATEGORY_RULES = category_prompt_block()
+
+ENRICHMENT_SYSTEM_PROMPT = f"""You are an isolated financial intelligence string extraction parser microservice engine.
 Your specific structural instructions are to accept raw, single-line data entries and resolve them into perfectly compliant structured parameters without additional narrative text wrapper outputs.
 
 You must format output streams to match the parameters of this designated JSON schema map:
-{
+{{
   "amount": float,
   "category": string,
   "confidence": float (range 0.00 to 1.00),
   "merchant": string or null,
   "is_recurring": boolean,
   "display_label": string
-}
+}}
+
+{_CATEGORY_RULES}
 
 The display_label must be a short (max 50 characters), title-case, human-readable summary suitable for a mobile UI.
 Do not include hashtags, currency symbols, or raw tag markers in display_label.
 Example: "Zoom Subscription Renewal" instead of "zoom subscription renewal @work"."""
 
-OLLAMA_IMPORT_SYSTEM_PROMPT = """You are a bulk financial transaction import parser.
+ENRICHMENT_IMPORT_SYSTEM_PROMPT = f"""You are a bulk financial transaction import parser.
 Accept multi-line plain text or CSV file content and extract every expense transaction.
 
 Return JSON matching this schema:
-{
+{{
   "transactions": [
-    {
+    {{
       "raw_input": "original line or CSV row text exactly as provided",
       "amount": float,
       "description": "fallback plain description without tags or currency symbols",
-      "tag": "category tag string",
+      "tag": "canonical category string",
       "display_label": "short human-readable title, max 50 chars, title-case",
       "created_at": "YYYY-MM-DD or null if unknown"
-    }
+    }}
   ]
-}
+}}
+
+{_CATEGORY_RULES}
 
 Rules:
 - One transaction per non-empty line (text) or data row (CSV).
 - Date lines (e.g. MM/DD or MM/DD/YYYY on their own line) apply to following transactions until the next date line.
 - Skip header rows in CSV files.
+- tag must use a canonical category value from the list above.
 - display_label must be user-friendly and suitable for a 2-line mobile UI label.
 - Preserve raw_input verbatim for each parsed entry."""
 
@@ -154,6 +175,23 @@ def apply_import_created_at(db_tx: Transaction, created_at: Optional[str]) -> No
         if parsed.year != current_year:
             parsed = parsed.replace(year=current_year)
         db_tx.created_at = parsed
+
+
+def client_tag(item: TransactionSyncItem) -> str:
+    return normalize_category(item.tag or "uncategorized")
+
+
+def client_provided_enrichment(item: TransactionSyncItem) -> bool:
+    return bool(item.display_label and str(item.display_label).strip())
+
+
+def apply_client_enrichment(db_tx: Transaction, item: TransactionSyncItem) -> None:
+    db_tx.merchant = item.merchant
+    db_tx.display_label = str(item.display_label).strip()
+    db_tx.ai_confidence = item.ai_confidence
+    db_tx.is_recurring = item.is_recurring
+    db_tx.tag = client_tag(item)
+    db_tx.sync_status = "completed"
 
 def transaction_to_response(tx: Transaction) -> EnrichedTransactionResponse:
     return EnrichedTransactionResponse(
@@ -179,7 +217,7 @@ def clear_enrichment_fields(db_tx: Transaction) -> None:
     db_tx.sync_status = "pending"
 
 class EnrichmentManager:
-    """Tracks in-flight Ollama jobs so retries never cancel an active enrichment."""
+    """Tracks in-flight LLM jobs so retries never cancel an active enrichment."""
 
     def __init__(self):
         self._tasks: dict[str, asyncio.Task] = {}
@@ -200,65 +238,24 @@ class EnrichmentManager:
             self._tasks[tx_id] = task
 
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=OLLAMA_SOFT_TIMEOUT)
+            await asyncio.wait_for(asyncio.shield(task), timeout=ENRICHMENT_SOFT_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning(
-                f"Enrichment soft-timeout for {tx_id} after {OLLAMA_SOFT_TIMEOUT}s; "
-                "continuing to wait for Ollama in background"
+                f"Enrichment soft-timeout for {tx_id} after {ENRICHMENT_SOFT_TIMEOUT}s; "
+                "continuing to wait for LLM in background"
             )
         except Exception:
             # Errors are logged and persisted inside _run_enrichment.
             pass
 
-    async def _call_ollama(
+    async def _call_llm(
         self,
         raw_input: str,
-        system_prompt: str = OLLAMA_SYSTEM_PROMPT,
+        system_prompt: str = ENRICHMENT_SYSTEM_PROMPT,
         *,
         think: Optional[bool] = None,
     ) -> dict:
-        timeout = httpx.Timeout(
-            connect=10.0,
-            read=OLLAMA_HARD_TIMEOUT,
-            write=10.0,
-            pool=10.0,
-        )
-        payload = {
-            "model": OLLAMA_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": raw_input},
-            ],
-            "format": "json",
-            "stream": False,
-            "options": {"temperature": 0.1},
-        }
-        if think is not None:
-            payload["think"] = think
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            think_note = f", think={think}" if think is not None else ""
-            logger.info(
-                f"Sending request to Ollama: {OLLAMA_URL}/api/chat "
-                f"with model {OLLAMA_MODEL}{think_note}"
-            )
-            response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Ollama server returned status code {response.status_code}: {response.text}"
-            )
-
-        resp_data = response.json()
-        message_content = resp_data.get("message", {}).get("content", "").strip()
-
-        if message_content.startswith("```"):
-            lines = message_content.splitlines()
-            if len(lines) >= 3:
-                message_content = "\n".join(lines[1:-1])
-
-        logger.info(f"Received response from Ollama: {message_content}")
-        return json.loads(message_content)
+        return await call_llm(raw_input, system_prompt, think=think)
 
     def _apply_enrichment(self, db_session: Session, tx_id: str, result: dict) -> None:
         db_tx = db_session.query(Transaction).filter(Transaction.id == tx_id).first()
@@ -268,7 +265,7 @@ class EnrichmentManager:
 
         db_tx.merchant = result.get("merchant")
         if result.get("category"):
-            db_tx.tag = result.get("category")
+            db_tx.tag = normalize_category(result.get("category"))
         if result.get("display_label"):
             db_tx.display_label = result.get("display_label")
         db_tx.ai_confidence = result.get("confidence", 1.0)
@@ -296,11 +293,11 @@ class EnrichmentManager:
             db_session.commit()
 
             try:
-                result = await self._call_ollama(raw_input, think=False)
+                result = await self._call_llm(raw_input, think=False)
                 self._apply_enrichment(db_session, tx_id, result)
             except httpx.TimeoutException:
                 logger.error(
-                    f"Enrichment hard-timeout for {tx_id} after {OLLAMA_HARD_TIMEOUT}s"
+                    f"Enrichment hard-timeout for {tx_id} after {ENRICHMENT_HARD_TIMEOUT}s"
                 )
                 self._mark_failed(db_session, tx_id)
             except Exception as e:
@@ -364,7 +361,7 @@ async def run_sync_pipeline(items: List[TransactionSyncItem]):
                     raw_input=item.raw_input,
                     amount=item.amount,
                     description=item.description,
-                    tag=item.tag,
+                    tag=client_tag(item),
                     sync_status="pending"
                 )
                 db_session.add(db_tx)
@@ -376,16 +373,24 @@ async def run_sync_pipeline(items: List[TransactionSyncItem]):
                     db_tx.raw_input != item.raw_input
                     or db_tx.amount != item.amount
                     or db_tx.description != (item.description or "")
-                    or db_tx.tag != (item.tag or "")
+                    or db_tx.tag != client_tag(item)
                 )
                 db_tx.raw_input = item.raw_input
                 db_tx.amount = item.amount
                 db_tx.description = item.description
-                db_tx.tag = item.tag
+                db_tx.tag = client_tag(item)
                 apply_client_created_at(db_tx, item)
                 if content_changed:
                     clear_enrichment_fields(db_tx)
                 db_session.commit()
+
+            if client_provided_enrichment(item):
+                apply_client_enrichment(db_tx, item)
+                db_session.commit()
+                logger.info(
+                    f"Transaction {db_tx.id} enriched by client; skipping server LLM"
+                )
+                continue
 
             if db_tx.sync_status in ("pending", "failed"):
                 await enrich_transaction_with_ollama(db_tx.id, db_tx.raw_input)
@@ -397,11 +402,11 @@ async def run_sync_pipeline(items: List[TransactionSyncItem]):
     finally:
         db_session.close()
 
-async def call_ollama_import(content: str, file_format: str) -> List[dict]:
+async def call_llm_import(content: str, file_format: str) -> List[dict]:
     user_content = f"Format: {file_format}\n\n{content}"
-    result = await enrichment_manager._call_ollama(
+    result = await enrichment_manager._call_llm(
         user_content,
-        system_prompt=OLLAMA_IMPORT_SYSTEM_PROMPT,
+        system_prompt=ENRICHMENT_IMPORT_SYSTEM_PROMPT,
         think=False,
     )
     transactions = result.get("transactions", [])
@@ -417,9 +422,9 @@ async def run_import_pipeline(content: str, file_format: str) -> None:
     )
 
     try:
-        logger.info("Calling Ollama to parse import file")
-        parsed_items = await call_ollama_import(content, file_format)
-        logger.info(f"Ollama returned {len(parsed_items)} parsed item(s)")
+        logger.info("Calling LLM to parse import file")
+        parsed_items = await call_llm_import(content, file_format)
+        logger.info(f"LLM returned {len(parsed_items)} parsed item(s)")
     except Exception as e:
         logger.error(f"Background import parsing failed: {e}", exc_info=True)
         return
@@ -450,7 +455,7 @@ async def run_import_pipeline(content: str, file_format: str) -> None:
                 raw_input=raw_input,
                 amount=float(amount),
                 description=item.get("description") or raw_input,
-                tag=item.get("tag") or "uncategorized",
+                tag=normalize_category(item.get("tag") or "uncategorized"),
                 display_label=item.get("display_label"),
                 sync_status="completed",
             )
@@ -489,7 +494,7 @@ def sync_transactions(
 ):
     """
     Sync endpoint that ingests client transactions, returns 202 immediately,
-    and processes the transactions in the background via Ollama.
+    and processes the transactions in the background via the configured LLM provider.
     """
     if not payload.transactions:
         return {"status": "success", "message": "No transactions to sync"}
@@ -503,7 +508,7 @@ def sync_transactions(
                 raw_input=item.raw_input,
                 amount=item.amount,
                 description=item.description,
-                tag=item.tag,
+                tag=client_tag(item),
                 sync_status="pending"
             )
             db.add(db_tx)
@@ -513,12 +518,12 @@ def sync_transactions(
                 db_tx.raw_input != item.raw_input
                 or db_tx.amount != item.amount
                 or db_tx.description != (item.description or "")
-                or db_tx.tag != (item.tag or "")
+                or db_tx.tag != client_tag(item)
             )
             db_tx.raw_input = item.raw_input
             db_tx.amount = item.amount
             db_tx.description = item.description
-            db_tx.tag = item.tag
+            db_tx.tag = client_tag(item)
             apply_client_created_at(db_tx, item)
             if content_changed:
                 clear_enrichment_fields(db_tx)
@@ -601,12 +606,12 @@ def update_transaction(
         db_tx.raw_input != item.raw_input
         or db_tx.amount != item.amount
         or db_tx.description != (item.description or "")
-        or db_tx.tag != (item.tag or "")
+        or db_tx.tag != client_tag(item)
     )
     db_tx.raw_input = item.raw_input
     db_tx.amount = item.amount
     db_tx.description = item.description
-    db_tx.tag = item.tag
+    db_tx.tag = client_tag(item)
     apply_client_created_at(db_tx, item)
     if content_changed:
         clear_enrichment_fields(db_tx)
@@ -620,4 +625,9 @@ def update_transaction(
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "ollama_url": OLLAMA_URL, "ollama_model": OLLAMA_MODEL}
+    return enrichment_health()
+
+@app.get("/api/v1/enrichment/config", response_model=EnrichmentConfigResponse)
+def get_enrichment_config():
+    """Shares the tailnet OpenRouter credentials with connected clients."""
+    return EnrichmentConfigResponse(**openrouter_client_config())

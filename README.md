@@ -1,6 +1,6 @@
 # AuraExpense — Personal Finance Tracker
 
-Offline-first expense tracker with a Flutter mobile client and a FastAPI server that enriches transactions via Ollama (Qwen3-8B) over a Tailscale mesh network.
+Offline-first expense tracker with a Flutter mobile client and a FastAPI server. Transactions are enriched on-device via OpenRouter (key shared from the server) with an Ollama fallback on the server, synced over a Tailscale mesh network.
 
 ## Project structure
 
@@ -39,16 +39,18 @@ Copy the example env file and adjust as needed:
 cp server/.env.example server/.env
 ```
 
-| Variable       | Default                    | Description              |
-|----------------|----------------------------|--------------------------|
-| `OLLAMA_URL`   | `http://127.0.0.1:11434`   | Ollama API endpoint      |
-| `OLLAMA_MODEL` | `qwen3:8b`                 | Model for enrichment     |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API endpoint (server fallback + import parsing) |
+| `OLLAMA_MODEL` | `qwen3:8b` | Ollama model |
+| `OPENROUTER_API_KEY` | — | Shared with tailnet clients for on-device enrichment |
+| `OPENROUTER_MODEL` | `openrouter/free` | Free OpenRouter model only (`openrouter/free` or `*:free`) |
+| `ENRICHMENT_SOFT_TIMEOUT` | `60` | Soft timeout (seconds) |
+| `ENRICHMENT_HARD_TIMEOUT` | `300` | Hard timeout (seconds) |
 
-Pull the model if you haven't already:
+**Ollama** (local): pull `qwen3:8b` on the server host. Used when the client has not pre-enriched a transaction, and for bulk import parsing.
 
-```bash
-ollama pull qwen3:8b
-```
+**OpenRouter** (cloud, free models): set `OPENROUTER_API_KEY` on the server. All devices on your tailnet fetch it via `GET /api/v1/enrichment/config` during sync and enrich transactions on-device before pushing to the server.
 
 ## Client configuration
 
@@ -125,7 +127,8 @@ make health
 
 | Method | Path                    | Description                          |
 |--------|-------------------------|--------------------------------------|
-| GET    | `/health`               | Server health + Ollama config        |
+| GET    | `/health`               | Server health + enrichment provider config |
+| GET    | `/api/v1/enrichment/config` | OpenRouter credentials for tailnet clients |
 | POST   | `/api/v1/sync`          | Push pending transactions (202)      |
 | GET    | `/api/v1/sync/status`   | Pull enriched transaction states     |
 | POST   | `/api/v1/import`        | Import `.txt`/`.csv` file content (202) |

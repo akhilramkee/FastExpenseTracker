@@ -132,13 +132,26 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
     });
 
     final ok = await widget.syncWorker.isServerReachable();
+    var enrichmentSynced = false;
+    if (ok) {
+      enrichmentSynced = await widget.syncWorker.syncEnrichmentConfig(
+        skipReachabilityCheck: true,
+      );
+    }
     if (!mounted) return;
     setState(() {
       _testingConnection = false;
       _connectionOk = ok;
-      _statusMessage = ok
-          ? 'Server reachable at ${widget.config.baseUrl}'
-          : 'Could not reach ${widget.config.baseUrl}/health';
+      if (!ok) {
+        _statusMessage = 'Could not reach ${widget.config.baseUrl}/health';
+      } else if (enrichmentSynced) {
+        _statusMessage =
+            'Server reachable. OpenRouter enrichment config synced from server.';
+      } else {
+        _statusMessage =
+            'Server reachable at ${widget.config.baseUrl}. '
+            'No OpenRouter key on server — Ollama fallback will be used.';
+      }
     });
   }
 
@@ -297,7 +310,8 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
             const SizedBox(height: 6),
             Text(
               'Paste a Tailscale API key to list devices on your tailnet. '
-              'Generate one at login.tailscale.com/admin/settings/keys',
+              'OpenRouter enrichment is configured on the server and synced automatically. '
+              'Generate a Tailscale key at login.tailscale.com/admin/settings/keys',
               style: TextStyle(color: Colors.grey[500], fontSize: 12),
             ),
             const SizedBox(height: 12),

@@ -44,6 +44,24 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_display_label()
 
+
+def normalize_all_tags() -> None:
+    from categories import normalize_category
+
+    db = SessionLocal()
+    updated = 0
+    try:
+        for tx in db.query(Transaction).all():
+            normalized = normalize_category(tx.tag)
+            if tx.tag != normalized:
+                tx.tag = normalized
+                updated += 1
+        if updated:
+            db.commit()
+            logger.info("Normalized tags on %s transaction(s).", updated)
+    finally:
+        db.close()
+
 def get_db():
     db = SessionLocal()
     try:

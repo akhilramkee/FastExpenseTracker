@@ -9,12 +9,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:intl/intl.dart';
+import 'core/config/enrichment_config_service.dart';
 import 'core/config/server_config_service.dart';
 import 'core/db/database_helper.dart';
 import 'core/models/transaction_model.dart';
 import 'core/network/sync_worker.dart';
 import 'core/services/expense_entry_service.dart';
 import 'core/utils/category_utils.dart';
+import 'core/utils/categories.dart';
 import 'core/utils/currency_utils.dart';
 import 'widgets/month_year_picker.dart';
 import 'widgets/quick_add_sheet.dart';
@@ -31,6 +33,7 @@ void main() async {
   }
 
   await ServerConfigService().initialize();
+  await EnrichmentConfigService().initialize();
 
   runApp(const ExpenseTrackerApp());
 }
@@ -753,7 +756,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         _buildFilterChip(label: 'All', value: null),
                         ..._availableCategories.map(
-                          (category) => _buildFilterChip(label: category, value: category),
+                          (category) => _buildFilterChip(
+                            label: formatCategoryLabel(category),
+                            value: category,
+                          ),
                         ),
                       ],
                     ),

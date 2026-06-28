@@ -64,6 +64,9 @@ class ServerConfigService {
 
   String get importUrl => baseUrl.isEmpty ? '' : '$baseUrl/api/v1/import';
 
+  String get enrichmentConfigUrl =>
+      baseUrl.isEmpty ? '' : '$baseUrl/api/v1/enrichment/config';
+
   String transactionUrl(String id) =>
       baseUrl.isEmpty ? '' : '$baseUrl/api/v1/transactions/$id';
 

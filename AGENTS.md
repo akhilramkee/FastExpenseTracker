@@ -14,12 +14,13 @@ This repo is **AuraExpense / TapEx**: an offline-first expense tracker with a Fl
   `cd client && flutter run -d web-server --web-port 9090 --web-hostname 0.0.0.0 --dart-define=SERVER_HOST=127.0.0.1`
   Pass `--dart-define=SERVER_HOST=127.0.0.1` for local dev — the default host is the Tailscale shortname `akhilesh`, which is unreachable here.
 
-### Ollama (optional AI enrichment) — NOT installed
-- The server enriches transactions by calling **Ollama** (`qwen3:8b`, port `11434`). Ollama is **not** installed in this environment.
-- Without Ollama the app is fully usable: the client parses entries locally (regex) and persists/displays them offline. Server `/api/v1/sync` still persists transactions, but enrichment marks them `sync_status: "failed"`, and `/api/v1/import` is a no-op (it depends on the LLM to parse the file). This degradation is expected, not a bug.
-- To exercise the AI path, run `ollama serve` + `ollama pull qwen3:8b` separately (heavy; CPU inference of an 8B model is very slow).
+### LLM enrichment
+- **OpenRouter** (on-device): set `OPENROUTER_API_KEY` in `server/.env`. Clients fetch it from `GET /api/v1/enrichment/config` during sync and enrich transactions locally before pushing.
+- **Ollama** (server fallback): `ollama serve` + `ollama pull qwen3:8b` on the server host. Used when the client has not pre-enriched a transaction, and for bulk import parsing.
+- Without OpenRouter on the server and without Ollama, sync still persists transactions but server enrichment marks them `failed`; import parsing also fails.
 
 ### Tests / lint
 - `make test-client` (`flutter test`): one pre-existing failure in `regex_parser_test.dart` ("reparse should clear enrichment fields") — the amount parser extracts `5` from "Zee5". This is an app-logic issue unrelated to environment setup.
 - `cd client && flutter analyze`: reports 2 pre-existing `info`-level lint notes in `lib/main.dart` (sqflite imports); no errors.
 - `make test-server`: requires a running server; the `import` portion times out without Ollama (see above).
+- `make test-server-unit`: runs `test_llm_client.py`, `test_categories.py`, and `test_enrichment_config.py` without a live server.
