@@ -114,6 +114,18 @@ class DatabaseHelper {
     });
   }
 
+  Future<TransactionModel?> getTransactionById(String id) async {
+    final db = await database;
+    final maps = await db.query(
+      'transactions',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return TransactionModel.fromMap(maps.first);
+  }
+
   Future<int> updateTransaction(TransactionModel transaction) async {
     final db = await database;
     return await db.update(

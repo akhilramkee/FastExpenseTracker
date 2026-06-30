@@ -31,11 +31,27 @@ ios-release:
 		cd client && flutter run --release -d "$(DEVICE)"; \
 	fi
 
+# Usage: make android-apk [VERSION=1.2.0] [SERVER_HOST=hostname]
+# VERSION sets the Android versionName and a monotonic versionCode so installs
+# upgrade cleanly instead of conflicting. Defaults to the pubspec.yaml version.
+VERSION ?=
+
 android-apk:
-	@if [ -n "$(SERVER_HOST)" ]; then \
-		cd client && flutter build apk --release --dart-define=SERVER_HOST=$(SERVER_HOST); \
+	@VERSION_ARGS=""; \
+	if [ -n "$(VERSION)" ]; then \
+		CLEAN=$$(echo "$(VERSION)" | sed -E 's/^v//; s/[-+].*$$//'); \
+		MAJOR=$$(echo "$$CLEAN" | cut -d. -f1); \
+		MINOR=$$(echo "$$CLEAN" | cut -d. -f2); \
+		PATCH=$$(echo "$$CLEAN" | cut -d. -f3); \
+		MAJOR=$${MAJOR:-0}; MINOR=$${MINOR:-0}; PATCH=$${PATCH:-0}; \
+		CODE=$$((MAJOR * 1000000 + MINOR * 1000 + PATCH)); \
+		VERSION_ARGS="--build-name=$$CLEAN --build-number=$$CODE"; \
+		echo "Building versionName=$$CLEAN versionCode=$$CODE"; \
+	fi; \
+	if [ -n "$(SERVER_HOST)" ]; then \
+		cd client && flutter build apk --release $$VERSION_ARGS --dart-define=SERVER_HOST=$(SERVER_HOST); \
 	else \
-		cd client && flutter build apk --release; \
+		cd client && flutter build apk --release $$VERSION_ARGS; \
 	fi
 	mkdir -p dist
 	cp client/build/app/outputs/flutter-apk/app-release.apk dist/TapEx-release.apk

@@ -89,21 +89,30 @@ make ios-release DEVICE="Akhilesh's iPhone (wireless)" SERVER_HOST=akhilesh
 
 **Option A — GitHub Actions (no Android Studio required)**
 
-Push a version tag to trigger an automatic APK build. The workflow uploads the APK as a
-GitHub Actions artifact and attaches it to the GitHub Release:
+Push a version tag to trigger an automatic APK build. The workflow derives the Android
+`versionName` and a monotonic `versionCode` from the tag, so newer tags install cleanly
+over older ones. It uploads the APK as a GitHub Actions artifact and attaches it to the
+GitHub Release:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 Download the APK from the **Releases** page or the workflow run's **Artifacts** tab.
 You can also run the workflow manually from the **Actions** tab.
 
+> **Versioning note:** `pubspec.yaml` ships a fixed `version: 1.0.0+1`, which is only a
+> fallback for local/dev builds. Android decides upgrade-vs-conflict by the integer
+> `versionCode`, so release builds **must** override it. Always cut releases via a `vX.Y.Z`
+> tag (or pass `VERSION=` locally) — otherwise every APK embeds the same `versionCode` and
+> the phone reports a package conflict.
+
 **Option B — Build locally**
 
 ```bash
-make android-apk
+# Pass VERSION so the APK gets a proper versionName/versionCode
+make android-apk VERSION=1.2.0
 ```
 
 The file is written to `dist/TapEx-release.apk` (also under `client/build/app/outputs/flutter-apk/app-release.apk`).

@@ -88,9 +88,8 @@ class _QuickAddSheetState extends State<_QuickAddSheet> {
 
     try {
       final saved = await widget.expenseEntryService.addFromText(text);
-      if (mounted) {
-        Navigator.pop(context, saved);
-      }
+      if (!mounted) return;
+      Navigator.pop(context, saved);
     } finally {
       if (mounted) {
         setState(() {

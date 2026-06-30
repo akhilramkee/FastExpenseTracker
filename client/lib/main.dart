@@ -81,6 +81,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedYear = DateTime.now().year;
   List<TransactionModel> _transactions = [];
   bool _isSyncing = false;
+  bool _isSaving = false;
   bool _isImporting = false;
   bool _isLoading = true;
   bool _serverOnline = false;
@@ -312,15 +313,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _saveTransaction() async {
     final text = _entryController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSaving) return;
 
-    await _expenseEntryService.addFromText(text);
+    setState(() {
+      _isSaving = true;
+    });
     _entryController.clear();
 
-    await _loadTransactions();
-
-    // Proactively trigger background sync
-    _triggerSync();
+    try {
+      await _expenseEntryService.addFromText(
+        text,
+        onEnriched: (_) {
+          if (mounted) unawaited(_loadTransactions());
+        },
+      );
+      await _loadTransactions();
+      unawaited(_triggerSync());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
   }
 
   Future<void> _triggerSync() async {
@@ -462,8 +477,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _loadTransactions();
 
     if (_serverOnline) {
-      await _syncWorker.syncEditedTransaction(updated);
-      await _loadTransactions();
+      unawaited(_triggerSync());
     }
   }
 
@@ -703,12 +717,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                           ),
                           suffixIcon: IconButton(
-                            icon: const Icon(Icons.arrow_forward_rounded),
-                            onPressed: _saveTransaction,
+                            icon: _isSaving
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.arrow_forward_rounded),
+                            onPressed: _isSaving ? null : _saveTransaction,
                             color: const Color(0xFF06B6D4),
                           ),
                         ),
-                        onSubmitted: (_) => _saveTransaction(),
+                        onSubmitted: (_) {
+                          if (!_isSaving) _saveTransaction();
+                        },
                       ),
                       const Divider(height: 16, color: Colors.white10),
                       AnimatedSize(

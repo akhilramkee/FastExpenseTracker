@@ -75,12 +75,9 @@ class SyncWorker {
   }
 
   Future<void> _enrichPendingTransactions(List<TransactionModel> pending) async {
-    for (final tx in pending) {
-      final enriched = await _expenseEntryService.enrichIfPossible(tx);
-      if (enriched != tx) {
-        await _dbHelper.updateTransaction(enriched);
-      }
-    }
+    await Future.wait(
+      pending.map((tx) => _expenseEntryService.enrichInBackground(tx.id)),
+    );
   }
 
   Future<bool> performBackgroundSync({bool skipReachabilityCheck = false}) async {
@@ -203,12 +200,6 @@ class SyncWorker {
     if (!await isServerReachable()) return false;
 
     try {
-      final enriched = await _expenseEntryService.enrichIfPossible(tx);
-      if (enriched != tx) {
-        await _dbHelper.updateTransaction(enriched);
-        tx = enriched;
-      }
-
       await _dbHelper.updateSyncStatus(tx.id, SyncStatus.processing);
 
       final response = await http
