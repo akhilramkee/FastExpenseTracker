@@ -202,11 +202,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       return;
     }
+    final wasOffline = !_serverOnline;
     final online = await _syncWorker.isServerReachable();
     if (mounted) {
       setState(() {
         _serverOnline = online;
       });
+      if (wasOffline && online) {
+        unawaited(_triggerSync());
+      }
     }
   }
 
@@ -269,10 +273,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadTransactions() async {
-    final list = await _dbHelper.getTransactionsByMonthAndYear(
+    var list = await _dbHelper.getTransactionsByMonthAndYear(
       _selectedMonth,
       _selectedYear,
     );
+
+    // After reinstall/restore, default month may have no rows even though data exists.
+    if (list.isEmpty) {
+      final latest = await _dbHelper.getLatestTransactionDate();
+      if (latest != null &&
+          (latest.month != _selectedMonth || latest.year != _selectedYear)) {
+        _selectedMonth = latest.month;
+        _selectedYear = latest.year;
+        list = await _dbHelper.getTransactionsByMonthAndYear(
+          _selectedMonth,
+          _selectedYear,
+        );
+      }
+    }
+
     if (mounted) {
       setState(() {
         _transactions = list;

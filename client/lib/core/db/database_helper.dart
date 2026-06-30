@@ -86,6 +86,23 @@ class DatabaseHelper {
     });
   }
 
+  Future<DateTime?> getLatestTransactionDate() async {
+    final db = await database;
+    final maps = await db.query(
+      'transactions',
+      orderBy: 'created_at DESC',
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return DateTime.parse(maps.first['created_at'] as String);
+  }
+
+  Future<int> getTransactionCount() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT COUNT(*) AS count FROM transactions');
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
   Future<List<TransactionModel>> getTransactionsByMonthAndYear(int month, int year) async {
     final db = await database;
     final monthString = month.toString().padLeft(2, '0');

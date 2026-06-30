@@ -214,7 +214,7 @@ class TransactionModel {
       id: map['id'] as String,
       rawInput: map['raw_input'] as String,
       amount: (map['amount'] as num).toDouble(),
-      description: map['description'] as String,
+      description: (map['description'] as String?) ?? '',
       tag: normalizeCategory(map['tag'] as String?),
       merchant: map['merchant'] as String?,
       displayLabel: map['display_label'] as String?,

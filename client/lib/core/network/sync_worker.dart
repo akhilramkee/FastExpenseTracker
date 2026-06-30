@@ -123,15 +123,15 @@ class SyncWorker {
     }
   }
 
-  Future<bool> restoreFromServer({bool skipReachabilityCheck = false}) async {
-    if (!skipReachabilityCheck && !await isServerReachable()) return false;
+  Future<int> restoreFromServer({bool skipReachabilityCheck = false}) async {
+    if (!skipReachabilityCheck && !await isServerReachable()) return 0;
 
     try {
       final response = await http
           .get(Uri.parse(_config.statusUrl))
           .timeout(const Duration(seconds: 15));
 
-      if (response.statusCode != 200) return false;
+      if (response.statusCode != 200) return 0;
 
       final pendingDeletes = (await _dbHelper.getPendingDeletes()).toSet();
       final localTransactions = await _dbHelper.getTransactions();
@@ -143,15 +143,22 @@ class SyncWorker {
           .toSet();
       final List<dynamic> data = jsonDecode(response.body);
 
+      var restored = 0;
       for (final item in data) {
-        final serverTx = TransactionModel.fromMap(item as Map<String, dynamic>);
-        if (pendingDeletes.contains(serverTx.id)) continue;
-        if (localPendingIds.contains(serverTx.id)) continue;
-        await _dbHelper.insertTransaction(serverTx);
+        if (item is! Map) continue;
+        try {
+          final serverTx = TransactionModel.fromMap(Map<String, dynamic>.from(item));
+          if (pendingDeletes.contains(serverTx.id)) continue;
+          if (localPendingIds.contains(serverTx.id)) continue;
+          await _dbHelper.insertTransaction(serverTx);
+          restored++;
+        } catch (_) {
+          // Skip malformed rows so one bad record does not block the rest.
+        }
       }
-      return true;
+      return restored;
     } catch (_) {
-      return false;
+      return 0;
     }
   }
 
@@ -189,10 +196,13 @@ class SyncWorker {
     if (!await isServerReachable()) return false;
 
     await syncEnrichmentConfig(skipReachabilityCheck: true);
+
+    // Pull server state before pushing local changes (critical after reinstall).
+    await restoreFromServer(skipReachabilityCheck: true);
+
     await syncPendingDeletes(skipReachabilityCheck: true);
     final pushed = await performBackgroundSync(skipReachabilityCheck: true);
     await pullSyncUpdates(skipReachabilityCheck: true);
-    await restoreFromServer(skipReachabilityCheck: true);
     return pushed;
   }
 
