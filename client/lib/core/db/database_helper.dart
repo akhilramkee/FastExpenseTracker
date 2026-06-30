@@ -105,13 +105,13 @@ class DatabaseHelper {
 
   Future<List<TransactionModel>> getTransactionsByMonthAndYear(int month, int year) async {
     final db = await database;
-    final monthString = month.toString().padLeft(2, '0');
-    final yearString = year.toString();
+    final period =
+        '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}';
 
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
-      where: "strftime('%m', created_at) = ? AND strftime('%Y', created_at) = ?",
-      whereArgs: [monthString, yearString],
+      where: "substr(created_at, 1, 7) = ?",
+      whereArgs: [period],
       orderBy: 'created_at DESC',
     );
 

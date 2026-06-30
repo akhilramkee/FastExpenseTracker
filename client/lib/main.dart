@@ -245,7 +245,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _initializeData() async {
     try {
-      await _loadTransactions();
+      await _loadTransactions(autoSelectLatestIfEmpty: true);
     } finally {
       if (mounted) {
         setState(() {
@@ -272,14 +272,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _loadTransactions() async {
+  Future<void> _loadTransactions({bool autoSelectLatestIfEmpty = false}) async {
     var list = await _dbHelper.getTransactionsByMonthAndYear(
       _selectedMonth,
       _selectedYear,
     );
 
-    // After reinstall/restore, default month may have no rows even though data exists.
-    if (list.isEmpty) {
+    // Only on first load / post-restore: jump to the month of the newest transaction.
+    if (list.isEmpty && autoSelectLatestIfEmpty) {
       final latest = await _dbHelper.getLatestTransactionDate();
       if (latest != null &&
           (latest.month != _selectedMonth || latest.year != _selectedYear)) {
@@ -359,13 +359,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _triggerSync() async {
     if (_isSyncing) return;
+    final wasEmpty = _transactions.isEmpty;
     setState(() {
       _isSyncing = true;
     });
 
     try {
       await _syncWorker.syncAll();
-      await _loadTransactions();
+      await _loadTransactions(autoSelectLatestIfEmpty: wasEmpty);
     } finally {
       if (mounted) {
         setState(() {
