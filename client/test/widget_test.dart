@@ -13,10 +13,14 @@ void main() {
     await ServerConfigService().initialize();
   });
 
-  testWidgets('App renders dashboard screen', (WidgetTester tester) async {
+  testWidgets('App renders home shell with navigation', (WidgetTester tester) async {
     await tester.pumpWidget(const ExpenseTrackerApp());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
-    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).title, 'TapEx');
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Insights'), findsOneWidget);
+    expect(find.text('Home'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

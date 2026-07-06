@@ -21,6 +21,7 @@ import 'core/utils/currency_utils.dart';
 import 'widgets/month_year_picker.dart';
 import 'widgets/quick_add_sheet.dart';
 import 'widgets/server_settings_sheet.dart';
+import 'screens/home_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,7 +58,7 @@ class ExpenseTrackerApp extends StatelessWidget {
               fontFamily: 'Outfit',
             ),
       ),
-      home: const DashboardScreen(),
+      home: const HomeShell(),
     );
   }
 }
