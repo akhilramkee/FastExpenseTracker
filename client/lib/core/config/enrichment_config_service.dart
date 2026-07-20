@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'server_config_service.dart';
 
-/// Persists OpenRouter credentials synced from the tailnet server.
+/// Persists OpenRouter credentials locally (manual entry or optional server sync).
 class EnrichmentConfigService {
   static const _apiKeyStorageKey = 'openrouter_api_key';
   static const _modelKey = 'openrouter_model';
@@ -24,24 +24,39 @@ class EnrichmentConfigService {
 
   SharedPreferences? _prefs;
   String? _cachedApiKey;
+  bool _inMemoryApiKeyOnly = false;
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
+    await _seedApiKeyFromBuildDefineIfNeeded();
+    _cachedApiKey ??= await _secureStorage.read(key: _apiKeyStorageKey);
+  }
+
+  /// One-time migration: if [OPENROUTER_API_KEY] was passed at build time and no
+  /// saved key exists yet, use it as the initial default.
+  Future<void> _seedApiKeyFromBuildDefineIfNeeded() async {
+    const buildKey = String.fromEnvironment('OPENROUTER_API_KEY');
+    if (buildKey.isEmpty) return;
+    final existing = await _secureStorage.read(key: _apiKeyStorageKey);
+    if (existing != null && existing.isNotEmpty) return;
+    await setOpenRouterApiKey(buildKey);
   }
 
   /// Applies OpenRouter settings fetched from the sync server.
+  ///
+  /// Updates the local API key only when the server provides one; a manually
+  /// stored key is kept if the server has no OpenRouter configuration.
   Future<bool> applyFromServer({
     required bool configured,
     String? apiKey,
     required String model,
   }) async {
     await setOpenRouterModel(model);
-    if (!configured || apiKey == null || apiKey.trim().isEmpty) {
-      await setOpenRouterApiKey(null);
-      return false;
+    if (configured && apiKey != null && apiKey.trim().isNotEmpty) {
+      await setOpenRouterApiKey(apiKey);
+      return true;
     }
-    await setOpenRouterApiKey(apiKey);
-    return true;
+    return isConfigured;
   }
 
   /// Fetches OpenRouter settings from the tailnet server and caches them locally.
@@ -68,6 +83,7 @@ class EnrichmentConfigService {
   }
 
   Future<String?> getOpenRouterApiKey() async {
+    if (_inMemoryApiKeyOnly) return _cachedApiKey;
     _cachedApiKey ??= await _secureStorage.read(key: _apiKeyStorageKey);
     return _cachedApiKey;
   }
@@ -75,12 +91,14 @@ class EnrichmentConfigService {
   Future<void> setOpenRouterApiKey(String? key) async {
     final trimmed = key?.trim();
     if (trimmed == null || trimmed.isEmpty) {
-      await _secureStorage.delete(key: _apiKeyStorageKey);
       _cachedApiKey = null;
+      if (_inMemoryApiKeyOnly) return;
+      await _secureStorage.delete(key: _apiKeyStorageKey);
       return;
     }
-    await _secureStorage.write(key: _apiKeyStorageKey, value: trimmed);
     _cachedApiKey = trimmed;
+    if (_inMemoryApiKeyOnly) return;
+    await _secureStorage.write(key: _apiKeyStorageKey, value: trimmed);
   }
 
   String getOpenRouterModel() =>
@@ -107,6 +125,12 @@ class EnrichmentConfigService {
   void resetForTest() {
     _prefs = null;
     _cachedApiKey = null;
+    _inMemoryApiKeyOnly = false;
+  }
+
+  @visibleForTesting
+  void enableInMemoryApiKeyForTest() {
+    _inMemoryApiKeyOnly = true;
   }
 
   @visibleForTesting
