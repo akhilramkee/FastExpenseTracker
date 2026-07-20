@@ -9,8 +9,6 @@ import 'enrichment_service.dart';
 class ExpenseEntryService {
   final DatabaseHelper _dbHelper;
   final EnrichmentService _enrichmentService;
-  final EnrichmentConfigService _enrichmentConfig;
-  final ServerConfigService _serverConfig;
   final Map<String, Future<void>> _enriching = {};
 
   ExpenseEntryService({
@@ -19,8 +17,6 @@ class ExpenseEntryService {
     EnrichmentConfigService? enrichmentConfig,
     ServerConfigService? serverConfig,
   })  : _dbHelper = dbHelper ?? DatabaseHelper(),
-        _enrichmentConfig = enrichmentConfig ?? EnrichmentConfigService(),
-        _serverConfig = serverConfig ?? ServerConfigService(),
         _enrichmentService = enrichmentService ??
             EnrichmentService(
               config: enrichmentConfig ?? EnrichmentConfigService(),
@@ -59,9 +55,6 @@ class ExpenseEntryService {
 
   Future<TransactionModel> enrichIfPossible(TransactionModel tx) async {
     if (tx.displayLabel != null && tx.displayLabel!.isNotEmpty) return tx;
-    if (_serverConfig.isConfigured) {
-      await _enrichmentConfig.syncFromServer(_serverConfig);
-    }
     try {
       final result = await _enrichmentService.enrich(tx.rawInput);
       if (result == null) return tx;

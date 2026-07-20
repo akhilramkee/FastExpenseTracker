@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/config/enrichment_config_service.dart';
 import '../core/config/server_config_service.dart';
 import '../core/models/tailscale_device.dart';
 import '../core/network/sync_worker.dart';
@@ -51,7 +52,9 @@ class ServerSettingsSheet extends StatefulWidget {
 class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
   late final TextEditingController _hostController;
   late final TextEditingController _apiKeyController;
+  late final TextEditingController _openRouterKeyController;
   final TailscaleApiService _tailscaleApi = TailscaleApiService();
+  final EnrichmentConfigService _enrichmentConfig = EnrichmentConfigService();
 
   List<TailscaleDevice> _devices = [];
   bool _loadingDevices = false;
@@ -59,13 +62,22 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
   bool? _connectionOk;
   String? _deviceError;
   String? _statusMessage;
+  bool _openRouterConfigured = false;
 
   @override
   void initState() {
     super.initState();
     _hostController = TextEditingController(text: widget.config.getServerHost());
     _apiKeyController = TextEditingController();
+    _openRouterKeyController = TextEditingController();
     _loadApiKey();
+    _loadOpenRouterStatus();
+  }
+
+  Future<void> _loadOpenRouterStatus() async {
+    final configured = await _enrichmentConfig.isConfigured;
+    if (!mounted) return;
+    setState(() => _openRouterConfigured = configured);
   }
 
   Future<void> _loadApiKey() async {
@@ -80,6 +92,7 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
   void dispose() {
     _hostController.dispose();
     _apiKeyController.dispose();
+    _openRouterKeyController.dispose();
     super.dispose();
   }
 
@@ -109,8 +122,28 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
     widget.onSaved?.call();
   }
 
+  Future<void> _saveOpenRouterKey({bool clearWhenEmpty = false}) async {
+    final text = _openRouterKeyController.text.trim();
+    if (text.isEmpty) {
+      if (!clearWhenEmpty) return;
+      await _enrichmentConfig.setOpenRouterApiKey(null);
+    } else {
+      await _enrichmentConfig.setOpenRouterApiKey(text);
+    }
+    if (!mounted) return;
+    await _loadOpenRouterStatus();
+    setState(() {
+      if (text.isEmpty && clearWhenEmpty) {
+        _statusMessage = 'OpenRouter key cleared.';
+      } else if (text.isNotEmpty) {
+        _statusMessage = 'OpenRouter key saved on this device.';
+      }
+    });
+  }
+
   Future<void> _saveAndClose() async {
     await _saveApiKey();
+    await _saveOpenRouterKey();
     await _saveHost(closeOnSuccess: true);
   }
 
@@ -137,6 +170,7 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
       enrichmentSynced = await widget.syncWorker.syncEnrichmentConfig(
         skipReachabilityCheck: true,
       );
+      await _loadOpenRouterStatus();
     }
     if (!mounted) return;
     setState(() {
@@ -146,7 +180,10 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
         _statusMessage = 'Could not reach ${widget.config.baseUrl}/health';
       } else if (enrichmentSynced) {
         _statusMessage =
-            'Server reachable. OpenRouter enrichment config synced from server.';
+            'Server reachable. OpenRouter key synced from server to this device.';
+      } else if (_openRouterConfigured) {
+        _statusMessage =
+            'Server reachable. Using OpenRouter key stored on this device.';
       } else {
         _statusMessage =
             'Server reachable at ${widget.config.baseUrl}. '
@@ -300,6 +337,49 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
             ],
             const SizedBox(height: 28),
             const Text(
+              'OpenRouter (on-device enrichment)',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Stored securely on this device. Enrichment works offline once saved. '
+              'Test connection can also copy a key from the server when one is configured. '
+              'Use a free model only (${EnrichmentConfigService.defaultModel} or *:free).',
+              style: TextStyle(color: Colors.grey[500], fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _openRouterKeyController,
+              style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                labelText: 'OpenRouter API key',
+                hintText: _openRouterConfigured ? 'Key saved (enter to replace)' : 'sk-or-...',
+                labelStyle: TextStyle(color: Colors.grey[400]),
+                filled: true,
+                fillColor: const Color(0xFF0F101A),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onSubmitted: (_) => _saveOpenRouterKey(),
+            ),
+            if (_openRouterConfigured) ...[
+              const SizedBox(height: 8),
+              Text(
+                'On-device OpenRouter enrichment is enabled.',
+                style: TextStyle(color: Colors.greenAccent.shade200, fontSize: 12),
+              ),
+            ],
+            const SizedBox(height: 28),
+            const Text(
               'Tailnet devices',
               style: TextStyle(
                 fontSize: 16,
@@ -310,7 +390,6 @@ class _ServerSettingsSheetState extends State<ServerSettingsSheet> {
             const SizedBox(height: 6),
             Text(
               'Paste a Tailscale API key to list devices on your tailnet. '
-              'OpenRouter enrichment is configured on the server and synced automatically. '
               'Generate a Tailscale key at login.tailscale.com/admin/settings/keys',
               style: TextStyle(color: Colors.grey[500], fontSize: 12),
             ),
